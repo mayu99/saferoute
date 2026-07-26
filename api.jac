@@ -1,6 +1,6 @@
 """SafeRoute REST API for `jac start` — public (:pub, no-auth) walkers.
 
-Run:   jac start api.jac --no-client
+Run:   jac start api.jac --no_client
 Docs:  http://localhost:8000/docs
 
 Endpoints (all POST /walker/<name>, JSON body maps onto `has` fields):
@@ -23,6 +23,7 @@ import from seed { ensure_seeded }
 import from match { MatchWalker }
 import from hazard { HazardWalker, RerouteWalker }
 import from reset { ResetWorld }
+import from intake { intake }
 
 walker:pub submit_request {
     has raw_text: str;
@@ -40,16 +41,10 @@ walker:pub submit_request {
         root ++> hh;
         hh.ref = f"HH-{jid(hh)[0:8]}";
 
-        text_lower = self.raw_text.lower();
-        needs: list = [];
-        if "wheelchair" in text_lower {
-            hh +>:Requires:+> Need(kind="wheelchair");
-            needs.append("wheelchair");
-        }
-        if "pet" in text_lower or "dog" in text_lower or "cat" in text_lower {
-            hh +>:Requires:+> Need(kind="pets");
-            needs.append("pets");
-        }
+        # LLM-based intake with an automatic keyword-detection fallback if
+        # the LLM call fails or times out — see intake.jac. Never raises.
+        intake_result = intake(hh, self.raw_text);
+        needs = intake_result["needs"];
         hh +>:OriginAt:+> junction;
 
         junction spawn MatchWalker(household=hh);
@@ -62,6 +57,7 @@ walker:pub submit_request {
                 "household_ref": hh.ref,
                 "junction": self.junction_name,
                 "needs": needs,
+                "parse_method": intake_result["parse_method"],
                 "shelter_name": a.shelter_name,
                 "route": a.route,
                 "reason": a.reason,
@@ -72,6 +68,7 @@ walker:pub submit_request {
                 "household_ref": hh.ref,
                 "junction": self.junction_name,
                 "needs": needs,
+                "parse_method": intake_result["parse_method"],
                 "shelter_name": None,
                 "route": [],
                 "reason": "No qualifying shelter reachable.",

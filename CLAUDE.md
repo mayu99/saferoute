@@ -13,11 +13,45 @@
   shelter occupancy and road status, keeps topology), `hazard.jac`
   (closes a named road, marks affected Assignments stale, reroutes
   them via `RerouteWalker` — imports and reuses `MatchWalker`
-  unchanged), `api.jac` (REST API for `jac start` — see below). Run
-  the whole cycle with `./demo.sh` (reset -> seed -> match) or
-  `./demo.sh --hazard` (+ close Bay St -> reroute) to get back to a
-  known state before rehearsing — safe to re-run any number of
-  times.
+  unchanged), `api.jac` (REST API for `jac start` — see below),
+  `intake.jac` (LLM-based free-text need parsing with a keyword-
+  detection fallback — see below). Run the whole cycle with
+  `./demo.sh` (reset -> seed -> match) or `./demo.sh --hazard` (+
+  close Bay St -> reroute) to get back to a known state before
+  rehearsing — safe to re-run any number of times.
+- `intake.jac`: `def parse_request(raw_text: str) -> ParsedNeeds by
+  llm();` (ParsedNeeds is an `obj`, never a `node` — byllm needs a
+  plain schema-able type). `intake(hh, raw_text)` is the one entry
+  point `api.jac`'s `submit_request` calls: try the LLM, `except
+  Exception` (see BROKEN below for why not just `except ByLLMError`)
+  falls back to `parse_request_fallback()` (plain keyword detection),
+  either way updates `hh.size` and spawns `Need` nodes, and reports
+  which path ran via `"parse_method": "llm" | "keyword_fallback"`.
+  Verified both paths end-to-end through the real server on the
+  sample "my mom uses a walker and we can't leave our cat behind,
+  there's four of us": both produce identical, correct output
+  (household_size=4, wheelchair+pets needs, routed to Fort Mason
+  Shelter) — with the key exported, `parse_method: "llm"`; with it
+  unset, a real Groq auth failure occurs and `parse_method:
+  "keyword_fallback"` kicks in automatically, proving the "never
+  hard-fail" requirement against a genuine failure, not a simulated
+  one.
+- **byLLM package import path is `byllm.*`, not `jaclang.byllm.*`.**
+  The `jac-reference` source checkout's internal monorepo layout
+  (`jaclang/byllm/...`) does not match the actually pip-installed
+  `byllm` package (`import from byllm.exceptions { ByLLMError }` is
+  correct; `import from jaclang.byllm.exceptions { ... }` fails with
+  `No module named 'jaclang.byllm'`). Always verify import paths
+  against the installed venv (`python3 -c "import byllm; print(byllm.__file__)"`),
+  not just the source-doc repo — they can diverge.
+- **`jac.toml`'s `${VAR}` interpolation does NOT read a `.env` file
+  automatically** — `jac run`/`jac start` only see a `.env`-defined
+  var if it's also exported into the actual process environment
+  (`export GROQ_API_KEY=...`, or `set -a; source .env; set +a`).
+  Confirmed: `GROQ_API_KEY` present in `.env` but not exported still
+  produced `"Invalid API Key"` from the real Groq call; exporting it
+  in the same shell before `jac run`/`jac start` fixed it immediately.
+  `.env` is gitignored and not auto-loaded — don't assume it is.
 - `seed.jac` exposes `def ensure_seeded() -> dict[str, Junction]`
   (idempotent — builds only if `find_junctions()` is empty) so both
   the CLI script and `api.jac`'s walkers can call the same seeding
@@ -218,6 +252,15 @@
   multi-run script should start from an empty graph each time.
 
 ## KNOWN BROKEN — never generate these
+- **Don't rely on `except ByLLMError` alone to catch a failed `by
+  llm()` call.** A real Groq auth failure (invalid/missing API key)
+  surfaced as a raw `litellm.BadRequestError`, NOT wrapped in byllm's
+  `ByLLMError` hierarchy — it was only caught by a subsequent generic
+  `except Exception as e`, confirmed by which log line printed
+  ("failed unexpectedly" from the `Exception` branch, not the
+  `ByLLMError` branch). Always keep a final `except Exception as e`
+  after any more-specific byllm exception handler as the real safety
+  net, especially for anything that "must never hard-fail."
 - `jac start api.jac --no-client` (hyphen) → `error: unrecognized
   arguments: --no-client`. This installed version's actual flag is
   `--no_client` (underscore) / short form `-n` — confirmed via `jac
