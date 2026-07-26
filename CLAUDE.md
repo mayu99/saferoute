@@ -37,6 +37,26 @@
   [...]}, "reports": [...]}, "error", "meta"}` — the reported values
   are duplicated at `data.reports` and `data.result.reports`, read
   either.
+- `viz/index.html` is a framework-free static page wired to the live
+  `api.jac` server (`API_BASE = "http://localhost:8000"`, plain
+  `fetch()`, no build step). `fetchState()` calls `get_state()` and
+  `mapApiState()` reshapes the response into the SVG renderer's
+  expected shape (junction `name`->`id`, shelter `total_beds`->`beds`
+  etc., and route — a list of road labels — walked into `{from,to}`
+  junction segments via `routeToSegments()`). The household form
+  posts to `submit_request()`, the fire button to `trigger_hazard()`
+  (briefly renders the old route in red before the new one draws),
+  reset to `reset_world()` — every action refetches afterward rather
+  than hand-patching local state, so the page always reflects the
+  server. No browser was available in this environment to visually
+  click through it (no `chromium-cli`/node/playwright, no `pip`, no
+  passwordless `sudo` to install any of them) — verified instead by
+  porting the exact JS mapping logic to Python and running it against
+  the live server end-to-end (reset → get_state → 3 submissions →
+  trigger_hazard → get_state), asserting every reconstructed route
+  segment corresponds to a real connected road. If you need an actual
+  screenshot, install a headless browser first — don't claim visual
+  verification without one.
 
 ## VERIFIED WORKING on 0.16.7 (do not change these forms)
 - `node X { has field: str; }` / `edge Y { has f: str = "d"; }`
@@ -127,11 +147,14 @@
 - Getting an edge's *target* node: there is no `[edge_obj -->]` —
   edges don't support traversal syntax themselves. Query the edges
   and the nodes as two separate parallel lists from the SAME source
-  node and `zip()` them (the pattern already used in `MatchWalker`):
-  `edges = [edge here ->:Road:->]; nodes = [here ->:Road:->]; for
-  (e, n) in zip(edges, nodes) { ... }`. (Caught `[e --> ][0]` as
-  wrong from the docs before running it, not by failing at runtime —
-  edges just don't have a `-->` traversal form, only nodes do.)
+  node and `zip()` them: `edges = [edge here ->:Road:status ==
+  "open":->]; nodes = [here ->:Road:status == "open":->]; for (e, n)
+  in zip(edges, nodes) { ... }`. (Caught `[e --> ][0]` as wrong from
+  the docs before running it, not by failing at runtime — edges just
+  don't have a `-->` traversal form, only nodes do.) **The two
+  queries MUST share the same equality-style filter predicate** — see
+  BROKEN below for the zip-misalignment bug this pattern has without
+  one.
 - Node lookup by name pattern for idempotent scripts:
   `def find_junctions() -> dict[str, Junction] { found: dict[str,
   Junction] = {}; for n in [root -->] { if isinstance(n, Junction) {
@@ -218,6 +241,40 @@
   need "nearest by weighted distance," don't use `visit` for the
   search order at all; only use it (or skip it entirely, as here) —
   do the whole search with plain queries/dicts in one ability.
+- **`zip(edges, nodes)` from two SEPARATE unfiltered queries
+  (`[edge j ->:Road:->]` + `[j ->:Road:->]`, no predicate) is NOT
+  reliably order-aligned — but the SAME pattern WITH an equality
+  predicate on an edge field (`[edge j ->:Road:status ==
+  "open":->]` + `[j ->:Road:status == "open":->]`) IS reliably
+  aligned. Confirmed via a live A/B probe on the same junction/edges:
+  the unfiltered pair silently swapped which node two same-length
+  edges corresponded to (`Chestnut/Columbus` paired with `NobHill`
+  instead of `NorthBeach`, `Hyde St` got the swapped partner) while
+  the `status == "open"` filtered pair on the exact same edges paired
+  correctly. No error, no warning — just wrong (from, to) pairs. This
+  is why `MatchWalker`'s Dijkstra (always filtered by `status`) was
+  never wrong, but `api.jac`'s `get_state()` — which originally used
+  the unfiltered form because it needs BOTH open and closed roads —
+  produced a scrambled road list. Fixed by querying `status == "open"`
+  and `status == "closed"` as two separate filtered passes and merging,
+  never an unfiltered pair. Rule of thumb: never `zip()` two
+  side-by-side node/edge queries unless each carries the same
+  equality-style predicate; if you need "no filter," iterate every
+  literal value the field can take instead of dropping the predicate.
+- `jac start`'s single-process mode hardwires `access-control-allow-
+  origin: *` (confirmed via `curl -i` on both the OPTIONS preflight
+  and the real POST, with `Origin: null` to mimic a `file://` page) —
+  no CORS config needed for a `:pub`-only API, and don't add a proxy
+  "just in case." A real browser fetch() from a local HTML file
+  against `jac start` works with zero CORS setup.
+- Adding a temporary `walker:pub _debug_foo { ... }` to probe live
+  server-side state (query ordering, actual stored values) and
+  hitting it with `curl` is a fast, effective way to debug something
+  that only reproduces inside the running server's process — a
+  separate `jac run` CLI invocation against the same `.jac/data`
+  directory while the server is live can't see consistent state
+  (SQLite locking between the two processes) and isn't a substitute.
+  Delete the debug walker once done; it's not part of the API surface.
 
 ## Rules for you
 - ALWAYS read ./_jac_examples/ before writing unfamiliar syntax

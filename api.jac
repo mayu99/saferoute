@@ -126,16 +126,24 @@ walker:pub get_state {
                 "name": j.name, "x": j.x, "y": j.y, "shelter": shelter_view,
             });
 
-            edges = [edge j ->:Road:->];
-            nodes = [j ->:Road:->];
-            for (e, n) in zip(edges, nodes) {
-                ek = jid(e);
-                if ek not in seen_roads {
-                    seen_roads[ek] = True;
-                    roads.append({
-                        "from": j.name, "to": n.name,
-                        "label": e.label, "distance": e.distance, "status": e.status,
-                    });
+            # Two filtered queries per status value, NOT one unfiltered pair —
+            # `zip([edge j ->:Road:->], [j ->:Road:->])` (no predicate) is NOT
+            # reliably aligned (verified: it silently swapped which node two
+            # same-length edges paired with). The equality-filtered form
+            # (`status == "..."`) IS reliably aligned — the same form
+            # MatchWalker's Dijkstra already relies on. See CLAUDE.md.
+            for status_value in ["open", "closed"] {
+                edges = [edge j ->:Road:status == status_value:->];
+                nodes = [j ->:Road:status == status_value:->];
+                for (e, n) in zip(edges, nodes) {
+                    ek = jid(e);
+                    if ek not in seen_roads {
+                        seen_roads[ek] = True;
+                        roads.append({
+                            "from": j.name, "to": n.name,
+                            "label": e.label, "distance": e.distance, "status": e.status,
+                        });
+                    }
                 }
             }
         }

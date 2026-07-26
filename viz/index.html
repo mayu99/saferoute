@@ -175,6 +175,27 @@
       border-color: rgba(255,255,255,0.15);
     }
 
+    .form-input {
+      width: 100%;
+      background: var(--bg-glass);
+      border: 1px solid var(--border-glass);
+      border-radius: 8px;
+      padding: 8px 10px;
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 13px;
+    }
+    .form-input:focus {
+      outline: none;
+      border-color: var(--accent-blue);
+    }
+    textarea.form-input {
+      resize: vertical;
+    }
+    .form-row {
+      margin-top: 10px;
+    }
+
     main {
       position: relative;
       z-index: 1;
@@ -232,6 +253,16 @@
     @keyframes route-pulse {
       0%, 100% { stroke-width: 5; }
       50% { stroke-width: 7; }
+    }
+
+    /* Transient "this route just broke" overlay, shown briefly on reroute
+       before the new route draws in */
+    .road-line.route-old {
+      stroke: var(--accent-red);
+      stroke-width: 5;
+      filter: drop-shadow(0 0 10px var(--accent-red-glow));
+      opacity: 0.9;
+      animation: route-pulse 0.6s ease-in-out infinite;
     }
 
     .road-label {
@@ -490,8 +521,7 @@
   </div>
   <div class="controls">
     <button class="btn btn-reset" id="btn-reset" onclick="resetAll()">↺ Reset All</button>
-    <button class="btn btn-household" id="btn-household" onclick="addHousehold()">🏠 Add Household</button>
-    <button class="btn btn-hazard" id="btn-hazard" onclick="triggerFireOnLombard()">🔥 Fire jumps to Lombard</button>
+    <button class="btn btn-hazard" id="btn-hazard" onclick="triggerHazard()">🔥 Fire closes Bay Street</button>
   </div>
 </header>
 
@@ -523,6 +553,23 @@
   </div>
 
   <div class="side-panel">
+    <div class="panel-card">
+      <h3>Add Household</h3>
+      <form id="household-form" onsubmit="return submitHouseholdForm(event)">
+        <textarea
+          id="household-text"
+          class="form-input"
+          rows="3"
+          placeholder="Describe the household (e.g. &quot;wheelchair user with a dog&quot;)"
+        ></textarea>
+        <select id="household-junction" class="form-input form-row"></select>
+        <button
+          type="submit"
+          class="btn btn-household form-row"
+          style="width:100%; justify-content:center;"
+        >🏠 Submit Request</button>
+      </form>
+    </div>
     <div class="panel-card">
       <h3>Network Stats</h3>
       <div class="stat-grid">
@@ -566,91 +613,155 @@
 
 <script>
 // ═══════════════════════════════════════════════════════════════════
-//  STATE — single source of truth. Replace mock with fetchState().
+//  API — live data from `jac start api.jac --no_client` (port 8000)
 // ═══════════════════════════════════════════════════════════════════
-const STATE = {
-  junctions: [
-    { id: "Marina",      x: 250, y: 100, shelter: { name: "Marina Shelter",    beds: 60,  occupied: 34, pets: true,  wheelchair: false } },
-    { id: "Presidio",    x:  90, y: 190, shelter: { name: "Presidio Shelter",  beds: 120, occupied: 71, pets: false, wheelchair: true  } },
-    { id: "FortMason",   x: 410, y:  80, shelter: { name: "Fort Mason Relief", beds: 20,  occupied: 12, pets: true,  wheelchair: true  } },
-    { id: "RussianHill", x: 500, y: 230, shelter: null },
-    { id: "CowHollow",   x: 280, y: 250, shelter: null },
-    { id: "PacHeights",  x: 180, y: 380, shelter: null },
-    { id: "NorthBeach",  x: 660, y: 120, shelter: null },
-    { id: "NobHill",     x: 600, y: 340, shelter: null }
-  ],
+const API_BASE = "http://localhost:8000";
 
-  roads: [
-    { from: "Marina",      to: "Presidio",    label: "Mason St",      status: "open" },
-    { from: "Marina",      to: "FortMason",   label: "Marina Blvd",   status: "open" },
-    { from: "Marina",      to: "CowHollow",   label: "Fillmore St",   status: "open" },
-    { from: "FortMason",   to: "RussianHill", label: "Van Ness Ave",  status: "open" },
-    { from: "CowHollow",   to: "PacHeights",  label: "Fillmore St S", status: "open" },
-    { from: "CowHollow",   to: "RussianHill", label: "Polk St",       status: "open" },
-    { from: "RussianHill", to: "NorthBeach",  label: "Columbus Ave",  status: "open" },
-    { from: "RussianHill", to: "NobHill",     label: "Hyde St",       status: "open" },
-    { from: "NorthBeach",  to: "NobHill",     label: "Broadway",      status: "open" },
-    { from: "PacHeights",  to: "NobHill",     label: "California St", status: "open" },
-    { from: "Presidio",    to: "CowHollow",   label: "Lyon St",       status: "open" },
-    // Lombard St is the road the fire scenario closes
-    { from: "RussianHill", to: "Marina",      label: "Lombard St",    status: "open" }
-  ],
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-  // Households placed by the "Add Household" button
-  households: [],
-
-  // Highlighted route segments  [ { from, to }, ... ]
-  highlightedRoutes: []
-};
-
-// ─── Pre-defined household scenarios ────────────────────────────
-// Each entry: junction to place marker, route path (junction ids) to shelter
-const HOUSEHOLD_SCENARIOS = [
-  {
-    junction: "NobHill",
-    name: "Garcia family",
-    route: ["NobHill", "RussianHill", "FortMason"],    // → Fort Mason Relief
-    shelter: "FortMason"
-  },
-  {
-    junction: "PacHeights",
-    name: "Chen family",
-    route: ["PacHeights", "CowHollow", "Marina"],       // → Marina Shelter
-    shelter: "Marina"
-  },
-  {
-    junction: "NorthBeach",
-    name: "Okafor family",
-    route: ["NorthBeach", "RussianHill", "Marina", "Presidio"], // → Presidio
-    shelter: "Presidio"
-  },
-  {
-    junction: "CowHollow",
-    name: "Patel family",
-    route: ["CowHollow", "Marina"],                      // → Marina Shelter
-    shelter: "Marina"
+// POST /walker/<name> with a JSON body, unwrap the envelope, return the
+// walker's first report (or null on any failure — errors are surfaced via
+// toast/log, not thrown, since button handlers don't want to deal with catch).
+async function postWalker(name, body) {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/walker/${name}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {})
+    });
+  } catch (err) {
+    // A CORS block and "server isn't running" both surface as a generic
+    // TypeError here — the Fetch API deliberately hides the distinction from
+    // JS for security reasons. Check the browser console: a CORS block shows
+    // an explicit "... has been blocked by CORS policy" message there (not
+    // here). `jac start`'s single-process mode hardwires
+    // access-control-allow-origin: * with no config knob, so a real CORS
+    // block here would mean something else is sitting in front of it
+    // (a proxy/gateway) stripping that header — don't silently add one of
+    // your own to work around it, fix or remove whatever is in the middle.
+    console.error(`[SafeRoute] fetch to /walker/${name} failed:`, err);
+    showToast(
+      `Can't reach the API at ${API_BASE}. Is "jac start api.jac --no_client" ` +
+      `running? Check the browser console — a CORS-policy message there means ` +
+      `something between the page and the server is stripping CORS headers ` +
+      `(jac start itself allows all origins).`,
+      "hazard"
+    );
+    addLogEntry("hazard", `⚠ Network error calling ${name} — see browser console.`);
+    return null;
   }
-];
-let nextHouseholdIndex = 0;
 
-// ═══════════════════════════════════════════════════════════════════
-//  fetchState() — stub for live data from `jac start`
-// ═══════════════════════════════════════════════════════════════════
-//
-// async function fetchState() {
-//   // Replace STATE contents with live data from the Jaseci backend.
-//   // Example endpoint when running `jac start`:
-//   //   const res = await fetch("http://localhost:8000/walker/get_map_state");
-//   //   const data = await res.json();
-//   //   STATE.junctions = data.junctions;
-//   //   STATE.roads     = data.roads;
-//   //   STATE.households = data.households || [];
-//   //   STATE.highlightedRoutes = data.highlightedRoutes || [];
-//   //   render(STATE);
-// }
-//
-// // Poll every 3 seconds:
-// // setInterval(fetchState, 3000);
+  let data;
+  try {
+    data = await res.json();
+  } catch (err) {
+    showToast(`API returned a non-JSON response (HTTP ${res.status}).`, "hazard");
+    return null;
+  }
+
+  if (!res.ok || data.ok === false) {
+    const msg = (data.error && data.error.message) || `HTTP ${res.status}`;
+    showToast(`API error: ${msg}`, "hazard");
+    addLogEntry("hazard", `⚠ ${name} failed: ${msg}`);
+    return null;
+  }
+
+  const reports = (data.data && data.data.reports) || [];
+  return reports.length > 0 ? reports[0] : null;
+}
+
+// ─── Map get_state()'s API shape onto the shape render() expects ───────
+function mapApiState(apiState) {
+  const junctions = apiState.junctions.map(j => ({
+    id: j.name, x: j.x, y: j.y,
+    shelter: j.shelter ? {
+      name: j.shelter.name,
+      beds: j.shelter.total_beds,
+      occupied: j.shelter.occupied,
+      pets: j.shelter.pets_allowed,
+      wheelchair: j.shelter.wheelchair_accessible
+    } : null
+  }));
+
+  const roads = apiState.roads.map(r => ({
+    from: r.from, to: r.to, label: r.label, status: r.status
+  }));
+
+  const roadByLabel = {};
+  roads.forEach(r => { roadByLabel[r.label] = r; });
+
+  const perJunctionCount = {};
+  const households = [];
+  const highlightedRoutes = [];
+
+  apiState.households.forEach(h => {
+    const count = perJunctionCount[h.junction] || 0;
+    perJunctionCount[h.junction] = count + 1;
+
+    households.push({
+      junction: h.junction,
+      name: h.ref,
+      rawRequest: h.raw_request,
+      needs: h.needs,
+      shelter: h.assignment ? h.assignment.shelter_name : null,
+      offsetX: count * 18,
+      offsetY: -count * 6
+    });
+
+    if (h.assignment && h.assignment.route && h.assignment.route.length > 0) {
+      routeToSegments(h.junction, h.assignment.route, roadByLabel)
+        .forEach(seg => highlightedRoutes.push(seg));
+    }
+  });
+
+  return { junctions, roads, households, highlightedRoutes };
+}
+
+// A route comes back from the API as a list of road LABELS, not junction
+// hops — walk them from the household's junction, flipping each road's
+// stored from/to as needed depending on which way the route traverses it.
+function routeToSegments(startJunction, routeLabels, roadByLabel) {
+  const segments = [];
+  let current = startJunction;
+  routeLabels.forEach(label => {
+    const road = roadByLabel[label];
+    if (!road) return;
+    const next = road.from === current ? road.to : road.from;
+    segments.push({ from: current, to: next });
+    current = next;
+  });
+  return segments;
+}
+
+function populateJunctionDropdown(state) {
+  const select = document.getElementById("household-junction");
+  const previous = select.value;
+  select.innerHTML = "";
+  state.junctions.forEach(j => {
+    const opt = document.createElement("option");
+    opt.value = j.id;
+    opt.textContent = j.shelter ? `${j.id} (${j.shelter.name})` : j.id;
+    select.appendChild(opt);
+  });
+  if (previous && state.junctions.some(j => j.id === previous)) {
+    select.value = previous;
+  }
+}
+
+let STATE = { junctions: [], roads: [], households: [], highlightedRoutes: [] };
+
+async function fetchState() {
+  const apiState = await postWalker("get_state", {});
+  if (!apiState) return null;
+  const mapped = mapApiState(apiState);
+  STATE = mapped;
+  populateJunctionDropdown(mapped);
+  render(mapped);
+  return mapped;
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────
 function junctionById(state, id) {
@@ -819,10 +930,14 @@ function render(state) {
     const size = 7;
     const cx = j.x + ox;
     const cy = j.y + oy;
-    el("polygon", {
+    const marker = el("polygon", {
       points: `${cx},${cy - size} ${cx + size},${cy} ${cx},${cy + size} ${cx - size},${cy}`,
       class: "household-marker"
     }, householdsLayer);
+    const needsSuffix = (h.needs && h.needs.length > 0) ? ` needs: ${h.needs.join(", ")}` : "";
+    el("title", {}, marker).textContent =
+      `${h.name}${h.rawRequest ? " — " + h.rawRequest : ""}${needsSuffix}` +
+      (h.shelter ? ` → ${h.shelter}` : " (no shelter assigned)");
 
     // Name label
     const hl = el("text", {
@@ -844,89 +959,132 @@ function render(state) {
   document.getElementById("stat-beds").textContent       = `${totalOcc}/${totalBeds}`;
   document.getElementById("stat-households").textContent = state.households.length;
 
-  // Disable fire button if Lombard already closed
-  const lombardRoad = state.roads.find(r => r.label === "Lombard St");
-  document.getElementById("btn-hazard").disabled = lombardRoad && lombardRoad.status === "closed";
+  // Disable fire button once Bay St is already closed
+  const bayStRoad = state.roads.find(r => r.label === "Bay St");
+  document.getElementById("btn-hazard").disabled = !!(bayStRoad && bayStRoad.status === "closed");
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  Actions
+//  Actions — all hit the live API, then refetch/re-render from it.
+//  Nothing here mutates STATE directly; STATE is always a reflection of
+//  the last successful get_state() response.
 // ═══════════════════════════════════════════════════════════════════
 
-// 🔥 Deterministic: always closes Lombard St
-function triggerFireOnLombard() {
-  const road = STATE.roads.find(r => r.label === "Lombard St");
-  if (!road || road.status === "closed") {
-    showToast("Lombard St is already closed!");
-    return;
-  }
-  road.status = "closed";
-  addLogEntry("hazard", `🔥 Fire on Lombard St — road closed (${road.from} ↔ ${road.to})`);
-  showToast("🔥 Fire jumps to Lombard — road closed!", "hazard");
-  render(STATE);
-}
-
-// 🏠 Add a household marker and draw its assigned route
-function addHousehold() {
-  if (nextHouseholdIndex >= HOUSEHOLD_SCENARIOS.length) {
-    showToast("All households placed!", "info");
+// 🔥 Close Bay St via trigger_hazard(), briefly flash the old (now-broken)
+// routes in red, then draw the rerouted state.
+async function triggerHazard() {
+  const roadLabel = "Bay St";
+  const already = STATE.roads.find(r => r.label === roadLabel && r.status === "closed");
+  if (already) {
+    showToast(`${roadLabel} is already closed!`);
     return;
   }
 
-  const scenario = HOUSEHOLD_SCENARIOS[nextHouseholdIndex];
-  nextHouseholdIndex++;
+  const hazardBtn = document.getElementById("btn-hazard");
+  hazardBtn.disabled = true;
 
-  // Slight offset so multiple markers at same junction don't overlap
-  const existing = STATE.households.filter(h => h.junction === scenario.junction).length;
-  STATE.households.push({
-    junction: scenario.junction,
-    name: scenario.name,
-    shelter: scenario.shelter,
-    offsetX: existing * 18,
-    offsetY: -existing * 6
+  const result = await postWalker("trigger_hazard", { road_label: roadLabel });
+  if (!result) {
+    hazardBtn.disabled = false;
+    return;
+  }
+
+  addLogEntry(
+    "hazard",
+    `🔥 Fire closes ${roadLabel} — ${result.assignments_staled} household(s) rerouting`
+  );
+  showToast(`🔥 Fire closes ${roadLabel}!`, "hazard");
+
+  // Fetch the post-reroute state manually (NOT via fetchState(), which would
+  // render the new yellow routes immediately) so we control render order:
+  // old route in red first, new route only after the flash.
+  const apiState = await postWalker("get_state", {});
+  if (!apiState) return;
+  const mapped = mapApiState(apiState);
+
+  // Reconstruct each affected household's OLD route (as junction segments)
+  // from the road labels trigger_hazard reported, using the household's
+  // (unchanged) junction from the state we just fetched.
+  const roadByLabel = {};
+  mapped.roads.forEach(r => { roadByLabel[r.label] = r; });
+
+  const oldSegments = [];
+  (result.rerouted || []).forEach(change => {
+    const hh = mapped.households.find(h => h.name === change.household_ref);
+    if (!hh) return;
+    routeToSegments(hh.junction, change.old_route, roadByLabel)
+      .forEach(seg => oldSegments.push(seg));
   });
 
-  // Build route segments from the path
-  for (let i = 0; i < scenario.route.length - 1; i++) {
-    STATE.highlightedRoutes.push({
-      from: scenario.route[i],
-      to: scenario.route[i + 1]
-    });
+  if (oldSegments.length > 0) {
+    showOldRoutesTransient(mapped, oldSegments);
+    await sleep(1400);
   }
 
-  // Increment occupied bed count at target shelter
-  const shelterJunction = junctionById(STATE, scenario.shelter);
-  if (shelterJunction && shelterJunction.shelter) {
-    shelterJunction.shelter.occupied = Math.min(
-      shelterJunction.shelter.occupied + 1,
-      shelterJunction.shelter.beds
-    );
-  }
-
-  addLogEntry("info", `🏠 ${scenario.name} placed at ${scenario.junction} → routed to ${shelterJunction.shelter.name}`);
-  showToast(`🏠 ${scenario.name} → ${shelterJunction.shelter.name}`, "info");
-  render(STATE);
+  STATE = mapped;
+  populateJunctionDropdown(mapped);
+  render(mapped);   // draw the real (new-route) state now that the flash is done
 }
 
-// ↺ Reset everything
-function resetAll() {
-  STATE.roads.forEach(r => r.status = "open");
-  STATE.households = [];
-  STATE.highlightedRoutes = [];
-  nextHouseholdIndex = 0;
-
-  // Reset occupied counts to initial values
-  const initialOccupied = { "Marina": 34, "Presidio": 71, "FortMason": 12 };
-  STATE.junctions.forEach(j => {
-    if (j.shelter && initialOccupied[j.id] !== undefined) {
-      j.shelter.occupied = initialOccupied[j.id];
-    }
+// Draw the map with routing suppressed, then overlay the stale route
+// segments in red on top — a temporary frame, not a STATE mutation.
+function showOldRoutesTransient(state, oldSegments) {
+  render({ ...state, highlightedRoutes: [] });
+  const routesLayer = document.getElementById("routes-layer");
+  oldSegments.forEach(seg => {
+    const a = junctionById(state, seg.from);
+    const b = junctionById(state, seg.to);
+    if (!a || !b) return;
+    el("line", { x1: a.x, y1: a.y, x2: b.x, y2: b.y, class: "road-line route-old" }, routesLayer);
   });
+}
+
+// 🏠 Submit the household form via submit_request(), then refetch.
+async function submitHouseholdForm(event) {
+  event.preventDefault();
+
+  const textEl = document.getElementById("household-text");
+  const junctionEl = document.getElementById("household-junction");
+  const rawText = textEl.value.trim();
+  const junctionName = junctionEl.value;
+
+  if (!rawText) {
+    showToast("Describe the household first.", "info");
+    return false;
+  }
+  if (!junctionName) {
+    showToast("Pick a junction first.", "info");
+    return false;
+  }
+
+  const result = await postWalker("submit_request", {
+    raw_text: rawText,
+    junction_name: junctionName
+  });
+  if (!result) return false;
+
+  if (result.shelter_name) {
+    addLogEntry("info", `🏠 ${result.household_ref} at ${junctionName} → ${result.shelter_name}`);
+    showToast(`🏠 ${result.household_ref} → ${result.shelter_name}`, "info");
+  } else {
+    addLogEntry("hazard", `🏠 ${result.household_ref} at ${junctionName} → no shelter available`);
+    showToast(`🏠 ${result.household_ref}: no qualifying shelter reachable.`, "hazard");
+  }
+
+  textEl.value = "";
+  await fetchState();
+  return false;
+}
+
+// ↺ Reset everything via reset_world(), then refetch.
+async function resetAll() {
+  const result = await postWalker("reset_world", {});
+  if (!result) return;
 
   document.getElementById("event-log").innerHTML =
     '<div style="font-size:12px;color:var(--text-secondary);padding:8px 0;">No events yet.</div>';
-  showToast("✓ All roads and households restored.", "info");
-  render(STATE);
+  showToast("✓ World reset.", "info");
+  await fetchState();
 }
 
 // ─── Event log ──────────────────────────────────────────────────
@@ -954,7 +1112,7 @@ function showToast(msg, type) {
 }
 
 // ─── Init ───────────────────────────────────────────────────────
-render(STATE);
+fetchState();
 </script>
 </body>
 </html>
