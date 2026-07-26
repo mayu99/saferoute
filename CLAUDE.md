@@ -34,6 +34,31 @@
 - Bidirectional typed connect: `a <+:Road:label="x":+> b;` creates
   a real traversable edge both ways (confirmed at runtime, not just
   a formatter fixture).
+- Tuple-unpacking for loop: `for (e, n) in zip(edges, nodes) { ... }`
+  — the parens around `(e, n)` are required; `for e, n in zip(...)`
+  is a parse error ("Expected 'in', got ','").
+- `continue;` / `disengage;` / bare `return;` all work inside walker
+  abilities exactly like Python/the fixtures show.
+- A walker `has` field typed to a custom node archetype (no default),
+  e.g. `has household: Household;`, works fine when the walker is
+  always constructed with an explicit keyword arg:
+  `start spawn MatchWalker(household=hh);`. The "every field needs a
+  default" rule is specific to **edges** bound via the connect
+  operator, not walker construction.
+- Printing/using a node's related neighbors (e.g. shelters attached
+  to a junction) should be done with a **query**, not a `visit` hop,
+  when order/grouping matters: `for n in [here ->:LocatedAt:->] { ... }`
+  runs synchronously inside the current ability, so output stays
+  grouped under the right node. Doing it by giving Shelter/Depot their
+  own typed `with entry` ability and letting the walker `visit` into
+  them prints in BFS-dequeue order instead, which reads as attached to
+  whatever junction happened to be dequeued near it — looked like a
+  wiring bug, wasn't (see `seed.jac` ShowGraph history).
+- `dict[str, float]` / `dict[str, list]` on `has` fields (instead of
+  bare `dict`) is needed for `jac check` to type-check `.get()`
+  results cleanly downstream (e.g. passing into `len()` or into a
+  `list`-typed node field) — `jac run` works either way, but `jac
+  check` throws `E1053: Cannot assign <any> to parameter ...`.
 - `.jac/` (cache + `data/anchor_store.db`) is gitignored, disposable,
   and **persists the object graph under `root` across separate
   `jac run` invocations in the same directory**. If you rename/move

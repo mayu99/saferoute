@@ -18,33 +18,21 @@ walker ShowGraph {
         for e in [edge here ->:Road:->] {
             print(f"  Road '{e.label}' -> distance={e.distance}mi status={e.status}");
         }
-        visit [-->];
-    }
-
-    can show_shelter with Shelter entry {
-        key = jid(here);
-        if key in self.seen {
-            return;
+        # Query attached Shelters/Depots directly instead of visiting them —
+        # printing here keeps them grouped under the right junction header
+        # instead of wherever the BFS queue happens to dequeue them.
+        for n in [here ->:LocatedAt:->] {
+            if isinstance(n, Shelter) {
+                print(
+                    f"  Shelter: {n.name} beds={n.occupied}/{n.total_beds} "
+                    f"wheelchair={n.wheelchair_accessible} pets={n.pets_allowed} "
+                    f"medical={n.medical_staff}"
+                );
+            } elif isinstance(n, Depot) {
+                print(f"  Depot: {n.name} cots={n.cots} water_cases={n.water_cases} med_kits={n.med_kits}");
+            }
         }
-        self.seen[key] = True;
-        at = [here <-:LocatedAt:<-][0].name;
-        print(
-            f"  Shelter: {here.name} (at {at}) beds={here.occupied}/{here.total_beds} "
-            f"wheelchair={here.wheelchair_accessible} pets={here.pets_allowed} "
-            f"medical={here.medical_staff}"
-        );
-        visit [-->];
-    }
-
-    can show_depot with Depot entry {
-        key = jid(here);
-        if key in self.seen {
-            return;
-        }
-        self.seen[key] = True;
-        at = [here <-:LocatedAt:<-][0].name;
-        print(f"  Depot: {here.name} (at {at}) cots={here.cots} water_cases={here.water_cases} med_kits={here.med_kits}");
-        visit [-->];
+        visit [->:Road:->];
     }
 }
 
