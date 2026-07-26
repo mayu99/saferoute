@@ -8,74 +8,94 @@ import from schema {
 
 walker MatchWalker {
     has household: Household;
-    has needs_wheelchair: bool = False;
-    has needs_pets: bool = False;
-    has initialized: bool = False;
-    has seen: dict[str, bool] = {};
-    has dist: dict[str, float] = {};
-    has path: dict[str, list] = {};
 
+    # A true Dijkstra, run entirely inside this one ability call — deliberately
+    # NOT driven by `visit`/multiple ability firings. jac's `visit` queue is
+    # FIFO by hop count, not by cumulative distance: when two neighbors are
+    # discovered from the same node at the same hop (e.g. Marina at 0.6mi and
+    # Presidio at 1.9mi, both reachable from CowHollow), whichever happens to
+    # be dequeued first would "win" even if it's farther. Always popping the
+    # global minimum-distance unvisited node avoids that entirely.
     can search with Junction entry {
-        if not self.initialized {
-            self.initialized = True;
-            for n in [self.household ->:Requires:->] {
-                if n.kind == "wheelchair" {
-                    self.needs_wheelchair = True;
-                }
-                if n.kind == "pets" {
-                    self.needs_pets = True;
-                }
+        needs_wheelchair = False;
+        needs_pets = False;
+        for n in [self.household ->:Requires:->] {
+            if n.kind == "wheelchair" {
+                needs_wheelchair = True;
             }
-            self.dist[jid(here)] = 0.0;
-            self.path[jid(here)] = [];
-        }
-
-        key = jid(here);
-        if key in self.seen {
-            return;
-        }
-        self.seen[key] = True;
-        d = self.dist.get(key, 0.0);
-        p = self.path.get(key, []);
-
-        for s in [here ->:LocatedAt:->] {
-            if isinstance(s, Shelter) {
-                if self.needs_wheelchair and not s.wheelchair_accessible {
-                    continue;
-                }
-                if self.needs_pets and not s.pets_allowed {
-                    continue;
-                }
-                if s.occupied >= s.total_beds {
-                    continue;
-                }
-                s.occupied = s.occupied + 1;
-                reason = (
-                    "Nearest open-road shelter meeting hard requirements "
-                    f"(wheelchair={self.needs_wheelchair}, pets={self.needs_pets}): "
-                    f"{d}mi over {len(p)} road(s)."
-                );
-                assignment = Assignment(shelter_name=s.name, route=p, reason=reason);
-                self.household +>:ResultedIn:+> assignment;
-                print(
-                    f"{self.household.ref} -> {s.name} "
-                    f"(distance={d}mi, route={p})"
-                );
-                disengage;
+            if n.kind == "pets" {
+                needs_pets = True;
             }
         }
 
-        edges = [edge here ->:Road:status == "open":->];
-        nodes = [here ->:Road:status == "open":->];
-        for (e, n) in zip(edges, nodes) {
-            nk = jid(n);
-            nd = d + e.distance;
-            if nk not in self.dist or nd < self.dist[nk] {
-                self.dist[nk] = nd;
-                self.path[nk] = p + [e.label];
+        start_key = jid(here);
+        dist: dict[str, float] = {start_key: 0.0};
+        path: dict[str, list] = {start_key: []};
+        node_by_id: dict = {start_key: here};
+        visited: dict[str, bool] = {};
+        found = False;
+
+        while not found {
+            best_key = "";
+            best_dist = -1.0;
+            for k in dist.keys() {
+                if k not in visited {
+                    if best_dist < 0 or dist[k] < best_dist {
+                        best_dist = dist[k];
+                        best_key = k;
+                    }
+                }
+            }
+            if best_key == "" {
+                print(f"{self.household.ref}: no qualifying shelter reachable.");
+                break;
+            }
+            visited[best_key] = True;
+            cur = node_by_id[best_key];
+            d = dist[best_key];
+            p = path[best_key];
+
+            for s in [cur ->:LocatedAt:->] {
+                if isinstance(s, Shelter) {
+                    if needs_wheelchair and not s.wheelchair_accessible {
+                        continue;
+                    }
+                    if needs_pets and not s.pets_allowed {
+                        continue;
+                    }
+                    if s.occupied >= s.total_beds {
+                        continue;
+                    }
+                    s.occupied = s.occupied + 1;
+                    reason = (
+                        "Nearest open-road shelter meeting hard requirements "
+                        f"(wheelchair={needs_wheelchair}, pets={needs_pets}): "
+                        f"{d}mi over {len(p)} road(s)."
+                    );
+                    assignment = Assignment(shelter_name=s.name, route=p, reason=reason);
+                    self.household +>:ResultedIn:+> assignment;
+                    print(
+                        f"{self.household.ref} -> {s.name} "
+                        f"(distance={d}mi, route={p})"
+                    );
+                    found = True;
+                }
+            }
+
+            if not found {
+                edges = [edge cur ->:Road:status == "open":->];
+                nodes = [cur ->:Road:status == "open":->];
+                for (e, n) in zip(edges, nodes) {
+                    nk = jid(n);
+                    nd = d + e.distance;
+                    if nk not in dist or nd < dist[nk] {
+                        dist[nk] = nd;
+                        path[nk] = p + [e.label];
+                        node_by_id[nk] = n;
+                    }
+                }
             }
         }
-        visit nodes;
     }
 }
 

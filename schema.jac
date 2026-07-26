@@ -71,3 +71,17 @@ def find_junctions() -> dict[str, Junction] {
     }
     return found;
 }
+
+def find_shelters() -> dict[str, Shelter] {
+    found: dict[str, Shelter] = {};
+    for j in [root -->] {
+        if isinstance(j, Junction) {
+            for n in [j ->:LocatedAt:->] {
+                if isinstance(n, Shelter) {
+                    found[n.name] = n;
+                }
+            }
+        }
+    }
+    return found;
+}

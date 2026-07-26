@@ -5,14 +5,18 @@
 - Run: `jac run <file>.jac`  | Check: `jac check <file>.jac`
 - Serve: `jac start` (NOT `jac serve` — removed)
 - Config in jac.toml; LLM model set there, not in code
-- Demo files: `schema.jac` (archetypes + `find_junctions()` helper),
-  `seed.jac` (idempotent — builds the 8-junction SF graph only if not
-  already there), `match.jac` (demo scenario: 3 households matched to
-  shelters), `reset.jac` (wipes households/needs/assignments/hazards,
-  resets shelter occupancy and road status, keeps topology). Run the
-  whole cycle with `./demo.sh` (reset -> seed -> match) to get back to
-  a known state before rehearsing — safe to re-run any number of
-  times.
+- Demo files: `schema.jac` (archetypes + `find_junctions()` /
+  `find_shelters()` helpers), `seed.jac` (idempotent — builds the
+  8-junction SF graph only if not already there), `match.jac` (demo
+  scenario: 3 households matched to shelters via `MatchWalker`),
+  `reset.jac` (wipes households/needs/assignments/hazards, resets
+  shelter occupancy and road status, keeps topology), `hazard.jac`
+  (closes a named road, marks affected Assignments stale, reroutes
+  them via `RerouteWalker` — imports and reuses `MatchWalker`
+  unchanged). Run the whole cycle with `./demo.sh` (reset -> seed ->
+  match) or `./demo.sh --hazard` (+ close Bay St -> reroute) to get
+  back to a known state before rehearsing — safe to re-run any
+  number of times.
 
 ## VERIFIED WORKING on 0.16.7 (do not change these forms)
 - `node X { has field: str; }` / `edge Y { has f: str = "d"; }`
@@ -75,6 +79,18 @@
   resolvable by jid, just unreachable).
 - Mutating an edge attribute (`e.status = "closed";`) persists across
   separate `jac run` invocations exactly like node attribute mutation.
+- Walker archetypes import across files like any other archetype:
+  `import from match { MatchWalker }` then spawn it normally. A
+  module's `with entry:__main__ { ... }` block behaves exactly like
+  Python's `if __name__ == "__main__":` guard — it does NOT re-run
+  when the file is imported rather than being the one passed to
+  `jac run`. Confirmed: importing a file whose entry block prints
+  something produces no output unless that file is the one directly
+  run.
+- `while cond { ... }` and `dict.keys()` both work exactly like
+  Python — useful for writing a real Dijkstra inside a single
+  ability call instead of relying on `visit` for traversal order
+  (see BROKEN below for why that matters).
 - Node lookup by name pattern for idempotent scripts:
   `def find_junctions() -> dict[str, Junction] { found: dict[str,
   Junction] = {}; for n in [root -->] { if isinstance(n, Junction) {
@@ -133,6 +149,28 @@
   a walker will query from more than one hop away, or through a
   stored field rather than direct traversal, should be attached
   under `root` too.
+- **`visit`'s queue is FIFO by hop count, not by cumulative distance
+  — do not use it to drive a "find the nearest X" search over a
+  weighted graph.** If two neighbors are discovered from the same
+  node at the same hop (e.g. from CowHollow, Marina at 0.6mi and
+  Presidio at 1.9mi are both one hop away), whichever gets
+  enqueued/dequeued first "wins" as the first-found qualifying
+  match, regardless of which one is actually closer. This is
+  invisible in a lot of test cases because "nearest by hop count"
+  and "nearest by distance" often coincide, and it doesn't error —
+  it just silently returns a farther shelter sometimes, depending on
+  internal edge storage order (which can differ between runs of the
+  identical script, e.g. after a delete+recreate cycle). Caught it
+  via `hazard.jac`'s reroute: with Bay St closed, the same
+  household's nearest-shelter search returned Presidio (3.5mi) on
+  one run and Marina (2.2mi, the actually-correct answer) on
+  another. Fixed by rewriting `MatchWalker` to run a real Dijkstra —
+  a `while` loop that always pops the global minimum-distance
+  *unvisited* node from a `dist` dict — entirely inside one ability
+  call, not spread across multiple `visit`-triggered firings. If you
+  need "nearest by weighted distance," don't use `visit` for the
+  search order at all; only use it (or skip it entirely, as here) —
+  do the whole search with plain queries/dicts in one ability.
 
 ## Rules for you
 - ALWAYS read ./_jac_examples/ before writing unfamiliar syntax
