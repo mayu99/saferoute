@@ -73,6 +73,18 @@
   viewport-fit and label-overlap fixes below were actually confirmed
   visually, not just reasoned about. Don't claim visual verification
   without doing this (or an equivalent) first.
+- Same Chrome trick, but for reading computed page state instead of
+  pixels: `--dump-dom` (in place of `--screenshot`) prints the fully
+  rendered DOM to stdout — the actual innerHTML `render()` produced,
+  not the template. Caught a real bug this way: a standalone Node.js
+  script that re-implemented `mapApiState()`'s road-distance sum
+  worked fine, but the live page showed "NaNmi" everywhere. The repro
+  script was subtly wrong (it added a `distance` field to its road
+  objects that the real `mapApiState()` never carried through from
+  the API response — a leftover from before per-household distance
+  existed, when no code needed `road.distance` client-side). Don't
+  trust a hand-rewritten repro of a function over checking the real
+  one; `--dump-dom` on the actual served page is what found it.
 - `viz/index.html` layout: the map used to require page-level
   scrolling to see the bottom junction (NobHill). Root cause was
   classic flexbox, not the SVG: `body { min-height: 100vh; }` lets

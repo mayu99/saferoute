@@ -26,8 +26,6 @@
       --accent-amber-glow: rgba(251,191,36,0.35);
       --shelter-fill: #818cf8;
       --shelter-glow: rgba(129,140,248,0.4);
-      --route-highlight: #facc15;
-      --route-highlight-glow: rgba(250,204,21,0.4);
       --radius: 16px;
       --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     }
@@ -228,16 +226,19 @@
 
     /* SVG styles */
     .road-line {
-      stroke-width: 3.5;
       stroke-linecap: round;
-      transition: stroke 0.5s ease, filter 0.5s ease, opacity 0.5s ease;
+      transition: stroke 0.5s ease, filter 0.5s ease, opacity 0.5s ease, stroke-width 0.4s ease;
     }
+    /* Open roads stay thin and dim so they recede behind assigned routes */
     .road-line.open {
+      stroke-width: 2;
       stroke: var(--accent-green);
-      filter: drop-shadow(0 0 6px var(--accent-green-glow));
-      opacity: 0.85;
+      filter: drop-shadow(0 0 3px var(--accent-green-glow));
+      opacity: 0.5;
     }
+    /* Closed roads: thick, red, dashed */
     .road-line.closed {
+      stroke-width: 5;
       stroke: var(--accent-red);
       filter: drop-shadow(0 0 8px var(--accent-red-glow));
       opacity: 1;
@@ -248,13 +249,18 @@
       to { stroke-dashoffset: -16; }
     }
 
-    /* Highlighted route path */
+    /* Assigned route: thick, bright amber, subtle animated dash flow so it
+       reads clearly against the thin dim open roads */
     .road-line.route-highlight {
-      stroke: var(--route-highlight);
-      stroke-width: 5;
-      filter: drop-shadow(0 0 10px var(--route-highlight-glow));
+      stroke: var(--accent-amber);
+      stroke-width: 6;
+      filter: drop-shadow(0 0 10px var(--accent-amber-glow));
       opacity: 1;
-      animation: route-pulse 1.5s ease-in-out infinite;
+      stroke-dasharray: 14 8;
+      animation: dash-flow 1.1s linear infinite;
+    }
+    @keyframes dash-flow {
+      to { stroke-dashoffset: -22; }
     }
     @keyframes route-pulse {
       0%, 100% { stroke-width: 5; }
@@ -426,8 +432,8 @@
       background-image: repeating-linear-gradient(90deg, var(--accent-red) 0 6px, transparent 6px 10px);
     }
     .legend-swatch.route {
-      background: var(--route-highlight);
-      box-shadow: 0 0 8px var(--route-highlight-glow);
+      background: var(--accent-amber);
+      box-shadow: 0 0 8px var(--accent-amber-glow);
     }
     .legend-dot {
       width: 14px; height: 14px;
@@ -478,6 +484,58 @@
     .event-log::-webkit-scrollbar { width: 4px; }
     .event-log::-webkit-scrollbar-track { background: transparent; }
     .event-log::-webkit-scrollbar-thumb { background: var(--border-glass); border-radius: 2px; }
+
+    /* Household assignment list — so the routing logic is legible without
+       squinting at the map itself */
+    .assignments-list {
+      max-height: 260px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .assignments-list::-webkit-scrollbar { width: 4px; }
+    .assignments-list::-webkit-scrollbar-track { background: transparent; }
+    .assignments-list::-webkit-scrollbar-thumb { background: var(--border-glass); border-radius: 2px; }
+
+    .assignment-row {
+      font-size: 12px;
+      padding: 8px 10px;
+      background: var(--bg-glass);
+      border-radius: 8px;
+      border-left: 3px solid var(--accent-amber);
+    }
+    .assignment-row.unassigned {
+      border-left-color: var(--text-secondary);
+    }
+    .assignment-row .a-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 3px;
+    }
+    .assignment-row .a-label {
+      color: var(--accent-amber);
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    .assignment-row .a-shelter {
+      color: var(--text-primary);
+      font-weight: 600;
+      font-size: 11px;
+      text-align: right;
+    }
+    .assignment-row .a-desc {
+      color: var(--text-secondary);
+      font-size: 11px;
+      font-style: italic;
+      margin-bottom: 3px;
+    }
+    .assignment-row .a-meta {
+      color: var(--text-secondary);
+      font-size: 10.5px;
+    }
 
     .log-entry {
       font-size: 12px;
@@ -621,6 +679,12 @@
       </div>
     </div>
     <div class="panel-card">
+      <h3>Assignments</h3>
+      <div class="assignments-list" id="assignments-list">
+        <div style="font-size:12px;color:var(--text-secondary);padding:8px 0;">No households yet.</div>
+      </div>
+    </div>
+    <div class="panel-card">
       <h3>Legend</h3>
       <div class="legend-item"><div class="legend-swatch open"></div> Road Open</div>
       <div class="legend-item"><div class="legend-swatch closed"></div> Road Closed</div>
@@ -648,6 +712,29 @@ const API_BASE = "http://localhost:8000";
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Short, stable per-household labels (H1, H2, ...) instead of raw refs like
+// "HH-27a70a01" — assigned once per ref, on first sight, and kept stable
+// across refetches so a household never relabels itself mid-demo. Cleared
+// on resetAll() so a fresh world starts back at H1.
+const householdShortLabels = {};
+let nextHouseholdNumber = 1;
+function shortLabelFor(ref) {
+  if (!householdShortLabels[ref]) {
+    householdShortLabels[ref] = `H${nextHouseholdNumber++}`;
+  }
+  return householdShortLabels[ref];
+}
+
+// Escape untrusted text (household free-text descriptions) before it goes
+// into innerHTML anywhere — the assignments panel builds rows via innerHTML
+// for convenience, so this is the one place raw_request needs sanitizing
+// (the SVG tooltip uses .textContent instead, which is safe by construction).
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str == null ? "" : String(str);
+  return div.innerHTML;
 }
 
 // POST /walker/<name> with a JSON body, unwrap the envelope, return the
@@ -716,28 +803,30 @@ function mapApiState(apiState) {
   }));
 
   const roads = apiState.roads.map(r => ({
-    from: r.from, to: r.to, label: r.label, status: r.status
+    from: r.from, to: r.to, label: r.label, status: r.status, distance: r.distance
   }));
 
   const roadByLabel = {};
   roads.forEach(r => { roadByLabel[r.label] = r; });
 
-  const perJunctionCount = {};
   const households = [];
   const highlightedRoutes = [];
 
   apiState.households.forEach(h => {
-    const count = perJunctionCount[h.junction] || 0;
-    perJunctionCount[h.junction] = count + 1;
+    const route = (h.assignment && h.assignment.route) ? h.assignment.route : [];
+    const distance = route.length > 0
+      ? route.reduce((sum, label) => sum + (roadByLabel[label] ? roadByLabel[label].distance : 0), 0)
+      : null;
 
     households.push({
       junction: h.junction,
       name: h.ref,
+      shortLabel: shortLabelFor(h.ref),
       rawRequest: h.raw_request,
       needs: h.needs,
       shelter: h.assignment ? h.assignment.shelter_name : null,
-      offsetX: count * 18,
-      offsetY: -count * 6
+      route: route,
+      distance: distance
     });
 
     if (h.assignment && h.assignment.route && h.assignment.route.length > 0) {
@@ -982,33 +1071,44 @@ function render(state) {
   });
 
   // ── Household markers ─────────────────────────────────────
+  // Positioned below-right of the junction dot — clear of the junction's
+  // own name label (always above) and, for shelters, clear of the
+  // centered icons/name column below the circle. Multiple households at
+  // the same junction step further down-right so they never stack.
+  const perJunctionSeen = {};
   state.households.forEach(h => {
     const j = junctionById(state, h.junction);
     if (!j) return;
-    const ox = h.offsetX || 0;
-    const oy = h.offsetY || 0;
+    const idx = perJunctionSeen[h.junction] || 0;
+    perJunctionSeen[h.junction] = idx + 1;
 
-    // Diamond marker
-    const size = 7;
-    const cx = j.x + ox;
-    const cy = j.y + oy;
+    const baseX = j.shelter ? 36 : 15;
+    const baseY = j.shelter ? 8 : 15;
+    const step = 13;
+    const cx = j.x + baseX;
+    const cy = j.y + baseY + idx * step;
+
+    const size = 6;
     const marker = el("polygon", {
       points: `${cx},${cy - size} ${cx + size},${cy} ${cx},${cy + size} ${cx - size},${cy}`,
       class: "household-marker"
     }, householdsLayer);
-    const needsSuffix = (h.needs && h.needs.length > 0) ? ` needs: ${h.needs.join(", ")}` : "";
+    const needsSuffix = (h.needs && h.needs.length > 0) ? ` Needs: ${h.needs.join(", ")}.` : "";
     el("title", {}, marker).textContent =
-      `${h.name}${h.rawRequest ? " — " + h.rawRequest : ""}${needsSuffix}` +
-      (h.shelter ? ` → ${h.shelter}` : " (no shelter assigned)");
+      `${h.shortLabel}: "${h.rawRequest}"${needsSuffix} ` +
+      (h.shelter ? `→ ${h.shelter}` : "→ no shelter assigned");
 
-    // Name label
+    // Short label (H1, H2, ...) instead of the raw ref — reads at a glance
+    // and never collides with the junction's own name.
     const hl = el("text", {
       x: cx, y: cy - size - 5,
       "text-anchor": "middle",
       class: "household-label"
     }, householdsLayer);
-    hl.textContent = h.name;
+    hl.textContent = h.shortLabel;
   });
+
+  renderAssignmentsList(state);
 
   // ── Stats ─────────────────────────────────────────────────
   const openCount   = state.roads.filter(r => r.status === "open").length;
@@ -1024,6 +1124,36 @@ function render(state) {
   // Disable fire button once Bay St is already closed
   const bayStRoad = state.roads.find(r => r.label === "Bay St");
   document.getElementById("btn-hazard").disabled = !!(bayStRoad && bayStRoad.status === "closed");
+}
+
+// Text panel listing each household's label, description, assigned
+// shelter, distance, and route — the assignment logic legible without
+// squinting at the map. Kept in sync with the map: same STATE, redrawn
+// every render() call.
+function renderAssignmentsList(state) {
+  const container = document.getElementById("assignments-list");
+  if (!state.households || state.households.length === 0) {
+    container.innerHTML =
+      '<div style="font-size:12px;color:var(--text-secondary);padding:8px 0;">No households yet.</div>';
+    return;
+  }
+
+  container.innerHTML = "";
+  state.households.forEach(h => {
+    const row = document.createElement("div");
+    row.className = "assignment-row" + (h.shelter ? "" : " unassigned");
+    const distText = h.distance != null ? `${h.distance.toFixed(1)}mi` : "—";
+    const routeText = h.route && h.route.length > 0 ? h.route.join(" → ") : "—";
+    row.innerHTML = `
+      <div class="a-header">
+        <span class="a-label">${escapeHtml(h.shortLabel)}</span>
+        <span class="a-shelter">${h.shelter ? "→ " + escapeHtml(h.shelter) : "unassigned"}</span>
+      </div>
+      <div class="a-desc">"${escapeHtml(h.rawRequest)}"</div>
+      <div class="a-meta">${distText} · ${escapeHtml(routeText)}</div>
+    `;
+    container.appendChild(row);
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1125,12 +1255,13 @@ async function submitHouseholdForm(event) {
   });
   if (!result) return false;
 
+  const shortLabel = shortLabelFor(result.household_ref);
   if (result.shelter_name) {
-    addLogEntry("info", `🏠 ${result.household_ref} at ${junctionName} → ${result.shelter_name}`);
-    showToast(`🏠 ${result.household_ref} → ${result.shelter_name}`, "info");
+    addLogEntry("info", `🏠 ${shortLabel} at ${junctionName} → ${result.shelter_name}`);
+    showToast(`🏠 ${shortLabel} → ${result.shelter_name}`, "info");
   } else {
-    addLogEntry("hazard", `🏠 ${result.household_ref} at ${junctionName} → no shelter available`);
-    showToast(`🏠 ${result.household_ref}: no qualifying shelter reachable.`, "hazard");
+    addLogEntry("hazard", `🏠 ${shortLabel} at ${junctionName} → no shelter available`);
+    showToast(`🏠 ${shortLabel}: no qualifying shelter reachable.`, "hazard");
   }
 
   textEl.value = "";
@@ -1142,6 +1273,10 @@ async function submitHouseholdForm(event) {
 async function resetAll() {
   const result = await postWalker("reset_world", {});
   if (!result) return;
+
+  // Fresh world, fresh numbering — the next household submitted starts at H1.
+  for (const ref in householdShortLabels) delete householdShortLabels[ref];
+  nextHouseholdNumber = 1;
 
   document.getElementById("event-log").innerHTML =
     '<div style="font-size:12px;color:var(--text-secondary);padding:8px 0;">No events yet.</div>';
