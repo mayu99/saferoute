@@ -61,3 +61,13 @@ edge Requires {}
 edge AssignedTo {}
 
 edge ResultedIn {}
+
+def find_junctions() -> dict[str, Junction] {
+    found: dict[str, Junction] = {};
+    for n in [root -->] {
+        if isinstance(n, Junction) {
+            found[n.name] = n;
+        }
+    }
+    return found;
+}
