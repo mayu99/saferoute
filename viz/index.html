@@ -32,14 +32,18 @@
       --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     }
 
+    html, body {
+      height: 100%;
+    }
+
     body {
       font-family: 'Inter', system-ui, -apple-system, sans-serif;
       background: var(--bg-deep);
       color: var(--text-primary);
-      min-height: 100vh;
+      height: 100vh;
       display: flex;
       flex-direction: column;
-      overflow-x: hidden;
+      overflow: hidden;
     }
 
     /* Ambient background blobs */
@@ -200,6 +204,7 @@
       position: relative;
       z-index: 1;
       flex: 1;
+      min-height: 0;
       display: flex;
       padding: 24px 32px;
       gap: 24px;
@@ -207,6 +212,7 @@
 
     .map-container {
       flex: 1;
+      min-height: 0;
       background: var(--bg-card);
       backdrop-filter: blur(24px);
       border: 1px solid var(--border-glass);
@@ -275,6 +281,17 @@
     }
     .road-label.closed-label {
       fill: var(--accent-red);
+    }
+    /* Subtle background chip behind each road label so it stays readable
+       when it lands near/over a shelter label or another line. Deliberately
+       a bit lighter than --bg-card/--bg-deep (which are nearly the same
+       dark navy as the page itself, so a chip in that tone barely reads as
+       a "background" at all) while still being a muted, subtle tone rather
+       than a jarring box. */
+    .label-bg {
+      fill: #232c47;
+      opacity: 0.92;
+      pointer-events: none;
     }
 
     .junction-dot {
@@ -356,9 +373,21 @@
     /* Side panel */
     .side-panel {
       width: 280px;
+      flex-shrink: 0;
+      min-height: 0;
       display: flex;
       flex-direction: column;
       gap: 16px;
+      overflow-y: auto;
+      /* Firefox + WebKit thin scrollbar so an overflowing panel (short
+         viewports like 1366x768) doesn't eat into the 280px width */
+      scrollbar-width: thin;
+    }
+    .side-panel::-webkit-scrollbar { width: 6px; }
+    .side-panel::-webkit-scrollbar-track { background: transparent; }
+    .side-panel::-webkit-scrollbar-thumb {
+      background: var(--border-glass);
+      border-radius: 3px;
     }
 
     .panel-card {
@@ -527,7 +556,7 @@
 
 <main>
   <div class="map-container">
-    <svg id="map-svg" viewBox="0 0 880 520" xmlns="http://www.w3.org/2000/svg">
+    <svg id="map-svg" viewBox="0 0 880 520" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
       <defs>
         <radialGradient id="junction-glow" cx="50%" cy="50%" r="50%">
           <stop offset="0%" stop-color="var(--accent-blue)" stop-opacity="0.3"/>
@@ -788,6 +817,26 @@ function el(tag, attrs, parent) {
   return e;
 }
 
+// Create a text label with a sized-to-fit background rect behind it (e.g.
+// road labels crossing behind a shelter's name stay readable either way).
+// getBBox() needs the text actually laid out, so this appends the text
+// first, measures it, then inserts the rect just before it in the DOM.
+function textWithBackground(parent, textContent, attrs) {
+  const t = el("text", attrs, parent);
+  t.textContent = textContent;
+  const bbox = t.getBBox();
+  const padX = 3, padY = 1.5;
+  const bg = el("rect", {
+    x: bbox.x - padX, y: bbox.y - padY,
+    width: bbox.width + padX * 2, height: bbox.height + padY * 2,
+    rx: 3, ry: 3,
+    class: "label-bg"
+  });
+  if (attrs.transform) bg.setAttribute("transform", attrs.transform);
+  parent.insertBefore(bg, t);
+  return t;
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  render(state) — redraws the entire SVG from the state object
 // ═══════════════════════════════════════════════════════════════════
@@ -833,17 +882,27 @@ function render(state) {
       }, routesLayer);
     }
 
-    // Road label
+    // Road label — nudged perpendicular to the road (not just "up"), so it
+    // actually clears the line and any nearby junction/shelter label
+    // regardless of the road's angle. A fixed vertical offset barely moves
+    // a near-vertical road's label off its own line (e.g. Marina<->CowHollow
+    // sat almost directly under Marina's shelter label). The background
+    // chip (below) is the second line of defense for whatever residual
+    // overlap remains.
     const mid = midpoint(a, b);
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const labelOffset = 13;
+    const labelX = mid.x + (dy / len) * labelOffset;
+    const labelY = mid.y - (dx / len) * labelOffset;
     const angle = angleDeg(a, b);
     const labelCls = road.status === "closed" ? "road-label closed-label" : "road-label";
-    const t = el("text", {
-      x: mid.x, y: mid.y - 6,
+    textWithBackground(labelsLayer, road.label, {
+      x: labelX, y: labelY,
       "text-anchor": "middle",
       class: labelCls,
-      transform: `rotate(${angle}, ${mid.x}, ${mid.y - 6})`
-    }, labelsLayer);
-    t.textContent = road.label;
+      transform: `rotate(${angle}, ${labelX}, ${labelY})`
+    });
   });
 
   // ── Junctions ─────────────────────────────────────────────
@@ -878,9 +937,12 @@ function render(state) {
       const icons = [];
       if (s.pets)       icons.push("🐕");
       if (s.wheelchair) icons.push("♿");
+      // Offset further below the circle (and its pulsing ring, max r=32)
+      // than a bare junction label would need, so it clears nearby road
+      // labels instead of sitting right on top of them.
       if (icons.length > 0) {
         const iconText = el("text", {
-          x: j.x, y: j.y + r + 14,
+          x: j.x, y: j.y + r + 20,
           "text-anchor": "middle",
           class: "shelter-icons-label"
         }, junctionsLayer);
@@ -889,7 +951,7 @@ function render(state) {
 
       // Shelter name below icons
       const nameText = el("text", {
-        x: j.x, y: j.y + r + (icons.length > 0 ? 28 : 14),
+        x: j.x, y: j.y + r + (icons.length > 0 ? 36 : 20),
         "text-anchor": "middle",
         class: "shelter-name-label"
       }, junctionsLayer);

@@ -48,15 +48,49 @@
   (briefly renders the old route in red before the new one draws),
   reset to `reset_world()` — every action refetches afterward rather
   than hand-patching local state, so the page always reflects the
-  server. No browser was available in this environment to visually
-  click through it (no `chromium-cli`/node/playwright, no `pip`, no
-  passwordless `sudo` to install any of them) — verified instead by
-  porting the exact JS mapping logic to Python and running it against
-  the live server end-to-end (reset → get_state → 3 submissions →
-  trigger_hazard → get_state), asserting every reconstructed route
-  segment corresponds to a real connected road. If you need an actual
-  screenshot, install a headless browser first — don't claim visual
-  verification without one.
+  server.
+- **Real browser screenshots ARE possible in this environment** even
+  though nothing browser-related is installed on the Linux side (no
+  `chromium-cli`/node/playwright/pip). This box is WSL2, and WSL2's
+  process interop lets Linux directly exec Windows binaries — Windows
+  already has a real Chrome at `/mnt/c/Program Files/Google/Chrome/
+  Application/chrome.exe`. Serve the page over `localhost` (Windows
+  Chrome can't see Linux paths like `/home/...` directly, but WSL2
+  forwards `localhost` both ways) with e.g. `python3 -m http.server
+  8080 --directory viz`, then:
+  `"/mnt/c/Program Files/Google/Chrome/Application/chrome.exe"
+  --headless=new --disable-gpu --user-data-dir="C:\Users\<user>\
+  AppData\Local\Temp\<scratch>" --window-size=1366,768
+  --screenshot="C:\Users\<user>\AppData\Local\Temp\<scratch>\out.png"
+  --virtual-time-budget=4000 http://localhost:8080/index.html` — a
+  real PNG lands at the Linux-side path
+  `/mnt/c/Users/<user>/AppData/Local/Temp/<scratch>/out.png`, viewable
+  directly. Must use a fresh `--user-data-dir` (a scratch folder under
+  Windows `Temp`, not the real profile) so it doesn't collide with the
+  user's actual Chrome session. `--force-device-scale-factor=N`
+  supersamples for zooming into a detail without needing image tools
+  (no PIL/ImageMagick were installed either). This is exactly how the
+  viewport-fit and label-overlap fixes below were actually confirmed
+  visually, not just reasoned about. Don't claim visual verification
+  without doing this (or an equivalent) first.
+- `viz/index.html` layout: the map used to require page-level
+  scrolling to see the bottom junction (NobHill). Root cause was
+  classic flexbox, not the SVG: `body { min-height: 100vh; }` lets
+  the page grow past the viewport, and a flex child's default
+  `min-height: auto` refuses to shrink below its own content's
+  natural size — so `.side-panel`'s stacked cards (especially once
+  the household form was added) forced `main`, then `body`, taller
+  than the viewport at 1366x768, which is what actually pushed the
+  map (itself rendered correctly, `preserveAspectRatio` never clips)
+  below the fold. Fixed with `body { height: 100vh; overflow: hidden;
+  }` (hard cap, not a floor) plus `min-height: 0;` on `main` and
+  `.map-container` (let them actually shrink to their flex-basis
+  instead of their content size) plus `overflow-y: auto;` on
+  `.side-panel` (so IT scrolls internally on short viewports instead
+  of forcing the whole page to). Confirmed via real Chrome screenshots
+  at both 1366x768 (side panel gets a visible internal scrollbar,
+  Event Log below the fold) and 1920x1080 (everything fits, no scroll
+  anywhere) — the map itself never scrolls at either size.
 
 ## VERIFIED WORKING on 0.16.7 (do not change these forms)
 - `node X { has field: str; }` / `edge Y { has f: str = "d"; }`
