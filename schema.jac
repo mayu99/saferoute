@@ -2,6 +2,8 @@
 
 node Junction {
     has name: str;
+    has x: float = 0.0;
+    has y: float = 0.0;
 }
 
 node Shelter {

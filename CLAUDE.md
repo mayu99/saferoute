@@ -13,10 +13,30 @@
   shelter occupancy and road status, keeps topology), `hazard.jac`
   (closes a named road, marks affected Assignments stale, reroutes
   them via `RerouteWalker` — imports and reuses `MatchWalker`
-  unchanged). Run the whole cycle with `./demo.sh` (reset -> seed ->
-  match) or `./demo.sh --hazard` (+ close Bay St -> reroute) to get
-  back to a known state before rehearsing — safe to re-run any
-  number of times.
+  unchanged), `api.jac` (REST API for `jac start` — see below). Run
+  the whole cycle with `./demo.sh` (reset -> seed -> match) or
+  `./demo.sh --hazard` (+ close Bay St -> reroute) to get back to a
+  known state before rehearsing — safe to re-run any number of
+  times.
+- `seed.jac` exposes `def ensure_seeded() -> dict[str, Junction]`
+  (idempotent — builds only if `find_junctions()` is empty) so both
+  the CLI script and `api.jac`'s walkers can call the same seeding
+  logic instead of duplicating it.
+- `Junction` has `x`/`y` float fields (default 0.0) matching the
+  layout in `viz/index.html`, set by `ensure_seeded()`. Chose this
+  over "front-end keeps its own position map" because `get_state()`
+  should feed a front-end directly, not require it to already know
+  the layout.
+- API server: `jac start api.jac --no_client` (see BROKEN below for
+  the exact flag spelling), endpoints at `POST /walker/<name>`, docs
+  at `/docs`. `walker:pub` = no auth required at all — verified with
+  real `curl` calls carrying no `Authorization` header, all four
+  endpoints (`submit_request`, `trigger_hazard`, `get_state`,
+  `reset_world`) returned `"ok": true` / HTTP 200. Response envelope:
+  `{"ok", "type", "data": {"result": {...walker fields..., "reports":
+  [...]}, "reports": [...]}, "error", "meta"}` — the reported values
+  are duplicated at `data.reports` and `data.result.reports`, read
+  either.
 
 ## VERIFIED WORKING on 0.16.7 (do not change these forms)
 - `node X { has field: str; }` / `edge Y { has f: str = "d"; }`
@@ -91,6 +111,27 @@
   Python — useful for writing a real Dijkstra inside a single
   ability call instead of relying on `visit` for traversal order
   (see BROKEN below for why that matters).
+- `walker:pub name { has field: type; can run with Root entry { ...
+  report {...}; } }` exposes `POST /walker/name` under `jac start`,
+  body JSON maps onto `has` fields. Walker archetypes with custom
+  `has` fields keep their mutated state on the object returned by
+  `spawn` — `result = root spawn SomeWalker(...); result.some_field`
+  reads it back correctly, confirmed both under plain `jac run` and
+  over the HTTP wire. This is how `api.jac` gets structured data out
+  of `HazardWalker`/`RerouteWalker` (imported unchanged from
+  `hazard.jac`) without touching their existing `print()`-based CLI
+  behavior — added `has staled: list = [];` / `has changes: list =
+  [];` fields alongside the prints.
+- `dict.values()` works like Python (`.keys()` already confirmed
+  earlier).
+- Getting an edge's *target* node: there is no `[edge_obj -->]` —
+  edges don't support traversal syntax themselves. Query the edges
+  and the nodes as two separate parallel lists from the SAME source
+  node and `zip()` them (the pattern already used in `MatchWalker`):
+  `edges = [edge here ->:Road:->]; nodes = [here ->:Road:->]; for
+  (e, n) in zip(edges, nodes) { ... }`. (Caught `[e --> ][0]` as
+  wrong from the docs before running it, not by failing at runtime —
+  edges just don't have a `-->` traversal form, only nodes do.)
 - Node lookup by name pattern for idempotent scripts:
   `def find_junctions() -> dict[str, Junction] { found: dict[str,
   Junction] = {}; for n in [root -->] { if isinstance(n, Junction) {
@@ -108,6 +149,12 @@
   multi-run script should start from an empty graph each time.
 
 ## KNOWN BROKEN — never generate these
+- `jac start api.jac --no-client` (hyphen) → `error: unrecognized
+  arguments: --no-client`. This installed version's actual flag is
+  `--no_client` (underscore) / short form `-n` — confirmed via `jac
+  start --help`, contradicting a doc reference that said hyphenated
+  flags. Trust `--help` over docs for CLI flag spelling on this
+  install.
 - `can name with `root entry` → runtime issubclass() crash
   Use untyped `with entry` and seed inside `with entry:__main__`
 - Edge archetype with any `has` field lacking a default, then

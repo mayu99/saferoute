@@ -24,6 +24,7 @@ walker HazardWalker {
     has road_label: str;
     has closed_count: int = 0;
     has staled_count: int = 0;
+    has staled: list = [];   # [{household_ref, shelter_name, route}, ...] for API callers
 
     can start with Root entry {
         visit [-->];
@@ -43,6 +44,11 @@ walker HazardWalker {
             if self.road_label in a.route and not a.stale {
                 a.stale = True;
                 self.staled_count = self.staled_count + 1;
+                self.staled.append({
+                    "household_ref": here.ref,
+                    "shelter_name": a.shelter_name,
+                    "route": a.route,
+                });
                 print(
                     f"STALE: {here.ref}'s assignment to {a.shelter_name} "
                     f"used '{self.road_label}' (route={a.route}) — marked for reroute."
@@ -54,6 +60,7 @@ walker HazardWalker {
 
 walker RerouteWalker {
     has rerouted_count: int = 0;
+    has changes: list = [];   # [{household_ref, old_shelter, old_route, new_shelter, new_route}, ...]
 
     can start with Root entry {
         visit [-->];
@@ -79,6 +86,20 @@ walker RerouteWalker {
                 start = [here ->:OriginAt:->][0];
                 start spawn MatchWalker(household=here);
                 self.rerouted_count = self.rerouted_count + 1;
+
+                new_shelter_name = None;
+                new_route: list = [];
+                for na in [here ->:ResultedIn:->] {
+                    new_shelter_name = na.shelter_name;
+                    new_route = list(na.route);
+                }
+                self.changes.append({
+                    "household_ref": here.ref,
+                    "old_shelter": old_shelter_name,
+                    "old_route": old_route,
+                    "new_shelter": new_shelter_name,
+                    "new_route": new_route,
+                });
             }
         }
     }
