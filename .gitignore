@@ -1,0 +1,8 @@
+.venv/
+.env
+__pycache__/
+*.session
+.jac/
+_jac_examples
+_jac_fixtures
+_jac_compiler_fixtures

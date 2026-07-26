@@ -1,0 +1,960 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="SafeRoute — San Francisco emergency route visualization showing road status and shelter locations.">
+  <title>SafeRoute — SF Junction Map</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg-deep: #0a0e1a;
+      --bg-card: rgba(18, 24, 42, 0.85);
+      --bg-glass: rgba(255,255,255,0.04);
+      --border-glass: rgba(255,255,255,0.08);
+      --text-primary: #e8ecf4;
+      --text-secondary: #8892a8;
+      --accent-green: #34d399;
+      --accent-green-glow: rgba(52,211,153,0.35);
+      --accent-red: #f87171;
+      --accent-red-glow: rgba(248,113,113,0.35);
+      --accent-blue: #60a5fa;
+      --accent-blue-glow: rgba(96,165,250,0.25);
+      --accent-amber: #fbbf24;
+      --accent-amber-glow: rgba(251,191,36,0.35);
+      --shelter-fill: #818cf8;
+      --shelter-glow: rgba(129,140,248,0.4);
+      --route-highlight: #facc15;
+      --route-highlight-glow: rgba(250,204,21,0.4);
+      --radius: 16px;
+      --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    body {
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background: var(--bg-deep);
+      color: var(--text-primary);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    /* Ambient background blobs */
+    body::before, body::after {
+      content: '';
+      position: fixed;
+      border-radius: 50%;
+      filter: blur(120px);
+      opacity: 0.12;
+      z-index: 0;
+      pointer-events: none;
+    }
+    body::before {
+      width: 600px; height: 600px;
+      background: var(--accent-blue);
+      top: -200px; left: -100px;
+    }
+    body::after {
+      width: 500px; height: 500px;
+      background: var(--shelter-fill);
+      bottom: -150px; right: -80px;
+    }
+
+    header {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 32px;
+      background: var(--bg-card);
+      backdrop-filter: blur(24px);
+      border-bottom: 1px solid var(--border-glass);
+    }
+
+    .logo-group {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .logo-icon {
+      width: 38px; height: 38px;
+      background: linear-gradient(135deg, var(--accent-green), var(--accent-blue));
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      font-weight: 800;
+      color: #0a0e1a;
+      box-shadow: 0 0 20px var(--accent-green-glow);
+    }
+    .logo-text {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    .logo-text span {
+      color: var(--accent-green);
+    }
+    .header-subtitle {
+      font-size: 13px;
+      color: var(--text-secondary);
+      font-weight: 500;
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 10px;
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: var(--transition);
+      position: relative;
+      overflow: hidden;
+    }
+    .btn::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(255,255,255,0.1), transparent);
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    .btn:hover::after { opacity: 1; }
+
+    .btn-hazard {
+      background: linear-gradient(135deg, #dc2626, #b91c1c);
+      color: #fff;
+      box-shadow: 0 4px 20px rgba(220,38,38,0.3);
+    }
+    .btn-hazard:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 28px rgba(220,38,38,0.45);
+    }
+    .btn-hazard:active { transform: translateY(0); }
+    .btn-hazard:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .btn-household {
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      color: #fff;
+      box-shadow: 0 4px 20px rgba(37,99,235,0.3);
+    }
+    .btn-household:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 28px rgba(37,99,235,0.45);
+    }
+    .btn-household:active { transform: translateY(0); }
+
+    .btn-reset {
+      background: var(--bg-glass);
+      color: var(--text-primary);
+      border: 1px solid var(--border-glass);
+    }
+    .btn-reset:hover {
+      background: rgba(255,255,255,0.08);
+      border-color: rgba(255,255,255,0.15);
+    }
+
+    main {
+      position: relative;
+      z-index: 1;
+      flex: 1;
+      display: flex;
+      padding: 24px 32px;
+      gap: 24px;
+    }
+
+    .map-container {
+      flex: 1;
+      background: var(--bg-card);
+      backdrop-filter: blur(24px);
+      border: 1px solid var(--border-glass);
+      border-radius: var(--radius);
+      overflow: hidden;
+      position: relative;
+    }
+    .map-container svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    /* SVG styles */
+    .road-line {
+      stroke-width: 3.5;
+      stroke-linecap: round;
+      transition: stroke 0.5s ease, filter 0.5s ease, opacity 0.5s ease;
+    }
+    .road-line.open {
+      stroke: var(--accent-green);
+      filter: drop-shadow(0 0 6px var(--accent-green-glow));
+      opacity: 0.85;
+    }
+    .road-line.closed {
+      stroke: var(--accent-red);
+      filter: drop-shadow(0 0 8px var(--accent-red-glow));
+      opacity: 1;
+      stroke-dasharray: 10 6;
+      animation: dash-move 1s linear infinite;
+    }
+    @keyframes dash-move {
+      to { stroke-dashoffset: -16; }
+    }
+
+    /* Highlighted route path */
+    .road-line.route-highlight {
+      stroke: var(--route-highlight);
+      stroke-width: 5;
+      filter: drop-shadow(0 0 10px var(--route-highlight-glow));
+      opacity: 1;
+      animation: route-pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes route-pulse {
+      0%, 100% { stroke-width: 5; }
+      50% { stroke-width: 7; }
+    }
+
+    .road-label {
+      font-family: 'Inter', sans-serif;
+      font-size: 9.5px;
+      font-weight: 600;
+      fill: var(--text-secondary);
+      pointer-events: none;
+      transition: fill 0.4s ease;
+    }
+    .road-label.closed-label {
+      fill: var(--accent-red);
+    }
+
+    .junction-dot {
+      transition: r 0.3s ease, filter 0.3s ease;
+      cursor: pointer;
+    }
+    .junction-dot:hover {
+      filter: drop-shadow(0 0 14px var(--accent-blue-glow));
+    }
+
+    .junction-label {
+      font-family: 'Inter', sans-serif;
+      font-size: 11.5px;
+      font-weight: 700;
+      fill: var(--text-primary);
+      pointer-events: none;
+    }
+
+    .shelter-ring {
+      fill: none;
+      stroke: var(--shelter-fill);
+      stroke-width: 2;
+      opacity: 0.5;
+      animation: pulse-ring 2.5s ease-in-out infinite;
+    }
+    @keyframes pulse-ring {
+      0%, 100% { r: 26; opacity: 0.15; }
+      50% { r: 32; opacity: 0.35; }
+    }
+
+    .shelter-circle {
+      fill: var(--shelter-fill);
+      filter: drop-shadow(0 0 10px var(--shelter-glow));
+      cursor: pointer;
+      transition: var(--transition);
+    }
+    .shelter-circle:hover {
+      filter: drop-shadow(0 0 18px var(--shelter-glow));
+    }
+
+    .shelter-bed-label {
+      font-family: 'Inter', sans-serif;
+      font-size: 9px;
+      font-weight: 800;
+      fill: #0a0e1a;
+      pointer-events: none;
+    }
+    .shelter-name-label {
+      font-family: 'Inter', sans-serif;
+      font-size: 9px;
+      font-weight: 600;
+      fill: var(--shelter-fill);
+      pointer-events: none;
+    }
+    .shelter-icons-label {
+      font-family: 'Inter', sans-serif;
+      font-size: 11px;
+      pointer-events: none;
+    }
+
+    /* Household marker */
+    .household-marker {
+      fill: var(--accent-amber);
+      filter: drop-shadow(0 0 8px var(--accent-amber-glow));
+      animation: marker-drop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    @keyframes marker-drop {
+      from { transform: translateY(-30px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+    .household-label {
+      font-family: 'Inter', sans-serif;
+      font-size: 9px;
+      font-weight: 700;
+      fill: var(--accent-amber);
+      pointer-events: none;
+    }
+
+    /* Side panel */
+    .side-panel {
+      width: 280px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .panel-card {
+      background: var(--bg-card);
+      backdrop-filter: blur(24px);
+      border: 1px solid var(--border-glass);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+    .panel-card h3 {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-secondary);
+      margin-bottom: 14px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 0;
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .legend-swatch {
+      width: 28px;
+      height: 4px;
+      border-radius: 2px;
+    }
+    .legend-swatch.open { background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green-glow); }
+    .legend-swatch.closed {
+      background: var(--accent-red);
+      box-shadow: 0 0 8px var(--accent-red-glow);
+      background-image: repeating-linear-gradient(90deg, var(--accent-red) 0 6px, transparent 6px 10px);
+    }
+    .legend-swatch.route {
+      background: var(--route-highlight);
+      box-shadow: 0 0 8px var(--route-highlight-glow);
+    }
+    .legend-dot {
+      width: 14px; height: 14px;
+      border-radius: 50%;
+    }
+    .legend-dot.junction { background: var(--accent-blue); box-shadow: 0 0 8px var(--accent-blue-glow); }
+    .legend-dot.shelter { background: var(--shelter-fill); box-shadow: 0 0 8px var(--shelter-glow); }
+    .legend-dot.household { background: var(--accent-amber); box-shadow: 0 0 8px var(--accent-amber-glow); }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .stat-box {
+      background: var(--bg-glass);
+      border: 1px solid var(--border-glass);
+      border-radius: 10px;
+      padding: 14px;
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 26px;
+      font-weight: 800;
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+    .stat-value.green { color: var(--accent-green); }
+    .stat-value.red { color: var(--accent-red); }
+    .stat-value.blue { color: var(--accent-blue); }
+    .stat-value.purple { color: var(--shelter-fill); }
+    .stat-value.amber { color: var(--accent-amber); }
+    .stat-label {
+      font-size: 11px;
+      color: var(--text-secondary);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .event-log {
+      max-height: 200px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .event-log::-webkit-scrollbar { width: 4px; }
+    .event-log::-webkit-scrollbar-track { background: transparent; }
+    .event-log::-webkit-scrollbar-thumb { background: var(--border-glass); border-radius: 2px; }
+
+    .log-entry {
+      font-size: 12px;
+      font-weight: 500;
+      padding: 8px 10px;
+      background: var(--bg-glass);
+      border-radius: 8px;
+      border-left: 3px solid var(--accent-red);
+      animation: slide-in 0.3s ease-out;
+    }
+    .log-entry.log-info {
+      border-left-color: var(--accent-blue);
+    }
+    .log-entry .log-time {
+      color: var(--text-secondary);
+      font-size: 10px;
+      display: block;
+      margin-bottom: 2px;
+    }
+    @keyframes slide-in {
+      from { opacity: 0; transform: translateX(-8px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+
+    /* Toast notification */
+    .toast {
+      position: fixed;
+      bottom: 32px;
+      left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      background: rgba(220,38,38,0.95);
+      backdrop-filter: blur(12px);
+      color: #fff;
+      padding: 14px 28px;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 600;
+      box-shadow: 0 8px 32px rgba(220,38,38,0.4);
+      z-index: 100;
+      opacity: 0;
+      transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s ease;
+      pointer-events: none;
+    }
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+    .toast.info {
+      background: rgba(37,99,235,0.95);
+      box-shadow: 0 8px 32px rgba(37,99,235,0.4);
+    }
+
+    @media (max-width: 900px) {
+      main { flex-direction: column; padding: 16px; }
+      .side-panel { width: 100%; flex-direction: row; flex-wrap: wrap; }
+      .panel-card { flex: 1; min-width: 200px; }
+      header { padding: 16px; flex-wrap: wrap; gap: 12px; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo-group">
+    <div class="logo-icon">SR</div>
+    <div>
+      <div class="logo-text">Safe<span>Route</span></div>
+      <div class="header-subtitle">SF Emergency Route Visualization</div>
+    </div>
+  </div>
+  <div class="controls">
+    <button class="btn btn-reset" id="btn-reset" onclick="resetAll()">↺ Reset All</button>
+    <button class="btn btn-household" id="btn-household" onclick="addHousehold()">🏠 Add Household</button>
+    <button class="btn btn-hazard" id="btn-hazard" onclick="triggerFireOnLombard()">🔥 Fire jumps to Lombard</button>
+  </div>
+</header>
+
+<main>
+  <div class="map-container">
+    <svg id="map-svg" viewBox="0 0 880 520" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="junction-glow" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="var(--accent-blue)" stop-opacity="0.3"/>
+          <stop offset="100%" stop-color="var(--accent-blue)" stop-opacity="0"/>
+        </radialGradient>
+        <filter id="glow-soft">
+          <feGaussianBlur stdDeviation="3" result="blur"/>
+          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+      </defs>
+      <!-- Grid dots for ambiance -->
+      <pattern id="grid-dots" x="0" y="0" width="40" height="40" patternUnits="userSpaceOnUse">
+        <circle cx="20" cy="20" r="0.8" fill="rgba(255,255,255,0.06)"/>
+      </pattern>
+      <rect width="880" height="520" fill="url(#grid-dots)"/>
+      <!-- Roads and junctions rendered by JS -->
+      <g id="routes-layer"></g>
+      <g id="roads-layer"></g>
+      <g id="labels-layer"></g>
+      <g id="junctions-layer"></g>
+      <g id="households-layer"></g>
+    </svg>
+  </div>
+
+  <div class="side-panel">
+    <div class="panel-card">
+      <h3>Network Stats</h3>
+      <div class="stat-grid">
+        <div class="stat-box">
+          <div class="stat-value green" id="stat-open">0</div>
+          <div class="stat-label">Open</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-value red" id="stat-closed">0</div>
+          <div class="stat-label">Closed</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-value purple" id="stat-beds">0</div>
+          <div class="stat-label">Beds</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-value amber" id="stat-households">0</div>
+          <div class="stat-label">Placed</div>
+        </div>
+      </div>
+    </div>
+    <div class="panel-card">
+      <h3>Legend</h3>
+      <div class="legend-item"><div class="legend-swatch open"></div> Road Open</div>
+      <div class="legend-item"><div class="legend-swatch closed"></div> Road Closed</div>
+      <div class="legend-item"><div class="legend-swatch route"></div> Assigned Route</div>
+      <div class="legend-item"><div class="legend-dot junction"></div> Junction</div>
+      <div class="legend-item"><div class="legend-dot shelter"></div> Shelter (occ / total)</div>
+      <div class="legend-item"><div class="legend-dot household"></div> Household</div>
+    </div>
+    <div class="panel-card" style="flex:1;">
+      <h3>Event Log</h3>
+      <div class="event-log" id="event-log">
+        <div style="font-size:12px;color:var(--text-secondary);padding:8px 0;">No events yet.</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════
+//  STATE — single source of truth. Replace mock with fetchState().
+// ═══════════════════════════════════════════════════════════════════
+const STATE = {
+  junctions: [
+    { id: "Marina",      x: 250, y: 100, shelter: { name: "Marina Shelter",    beds: 60,  occupied: 34, pets: true,  wheelchair: false } },
+    { id: "Presidio",    x:  90, y: 190, shelter: { name: "Presidio Shelter",  beds: 120, occupied: 71, pets: false, wheelchair: true  } },
+    { id: "FortMason",   x: 410, y:  80, shelter: { name: "Fort Mason Relief", beds: 20,  occupied: 12, pets: true,  wheelchair: true  } },
+    { id: "RussianHill", x: 500, y: 230, shelter: null },
+    { id: "CowHollow",   x: 280, y: 250, shelter: null },
+    { id: "PacHeights",  x: 180, y: 380, shelter: null },
+    { id: "NorthBeach",  x: 660, y: 120, shelter: null },
+    { id: "NobHill",     x: 600, y: 340, shelter: null }
+  ],
+
+  roads: [
+    { from: "Marina",      to: "Presidio",    label: "Mason St",      status: "open" },
+    { from: "Marina",      to: "FortMason",   label: "Marina Blvd",   status: "open" },
+    { from: "Marina",      to: "CowHollow",   label: "Fillmore St",   status: "open" },
+    { from: "FortMason",   to: "RussianHill", label: "Van Ness Ave",  status: "open" },
+    { from: "CowHollow",   to: "PacHeights",  label: "Fillmore St S", status: "open" },
+    { from: "CowHollow",   to: "RussianHill", label: "Polk St",       status: "open" },
+    { from: "RussianHill", to: "NorthBeach",  label: "Columbus Ave",  status: "open" },
+    { from: "RussianHill", to: "NobHill",     label: "Hyde St",       status: "open" },
+    { from: "NorthBeach",  to: "NobHill",     label: "Broadway",      status: "open" },
+    { from: "PacHeights",  to: "NobHill",     label: "California St", status: "open" },
+    { from: "Presidio",    to: "CowHollow",   label: "Lyon St",       status: "open" },
+    // Lombard St is the road the fire scenario closes
+    { from: "RussianHill", to: "Marina",      label: "Lombard St",    status: "open" }
+  ],
+
+  // Households placed by the "Add Household" button
+  households: [],
+
+  // Highlighted route segments  [ { from, to }, ... ]
+  highlightedRoutes: []
+};
+
+// ─── Pre-defined household scenarios ────────────────────────────
+// Each entry: junction to place marker, route path (junction ids) to shelter
+const HOUSEHOLD_SCENARIOS = [
+  {
+    junction: "NobHill",
+    name: "Garcia family",
+    route: ["NobHill", "RussianHill", "FortMason"],    // → Fort Mason Relief
+    shelter: "FortMason"
+  },
+  {
+    junction: "PacHeights",
+    name: "Chen family",
+    route: ["PacHeights", "CowHollow", "Marina"],       // → Marina Shelter
+    shelter: "Marina"
+  },
+  {
+    junction: "NorthBeach",
+    name: "Okafor family",
+    route: ["NorthBeach", "RussianHill", "Marina", "Presidio"], // → Presidio
+    shelter: "Presidio"
+  },
+  {
+    junction: "CowHollow",
+    name: "Patel family",
+    route: ["CowHollow", "Marina"],                      // → Marina Shelter
+    shelter: "Marina"
+  }
+];
+let nextHouseholdIndex = 0;
+
+// ═══════════════════════════════════════════════════════════════════
+//  fetchState() — stub for live data from `jac start`
+// ═══════════════════════════════════════════════════════════════════
+//
+// async function fetchState() {
+//   // Replace STATE contents with live data from the Jaseci backend.
+//   // Example endpoint when running `jac start`:
+//   //   const res = await fetch("http://localhost:8000/walker/get_map_state");
+//   //   const data = await res.json();
+//   //   STATE.junctions = data.junctions;
+//   //   STATE.roads     = data.roads;
+//   //   STATE.households = data.households || [];
+//   //   STATE.highlightedRoutes = data.highlightedRoutes || [];
+//   //   render(STATE);
+// }
+//
+// // Poll every 3 seconds:
+// // setInterval(fetchState, 3000);
+
+// ─── Helpers ─────────────────────────────────────────────────────
+function junctionById(state, id) {
+  return state.junctions.find(j => j.id === id);
+}
+
+function midpoint(a, b) {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+
+function angleDeg(a, b) {
+  let deg = Math.atan2(b.y - a.y, b.x - a.x) * (180 / Math.PI);
+  if (deg > 90) deg -= 180;
+  if (deg < -90) deg += 180;
+  return deg;
+}
+
+const svgNS = "http://www.w3.org/2000/svg";
+
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(svgNS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  render(state) — redraws the entire SVG from the state object
+// ═══════════════════════════════════════════════════════════════════
+function render(state) {
+  const routesLayer     = document.getElementById("routes-layer");
+  const roadsLayer      = document.getElementById("roads-layer");
+  const labelsLayer     = document.getElementById("labels-layer");
+  const junctionsLayer  = document.getElementById("junctions-layer");
+  const householdsLayer = document.getElementById("households-layer");
+
+  routesLayer.innerHTML     = "";
+  roadsLayer.innerHTML      = "";
+  labelsLayer.innerHTML     = "";
+  junctionsLayer.innerHTML  = "";
+  householdsLayer.innerHTML = "";
+
+  // ── Build set of highlighted edges for quick lookup ────────
+  const hlSet = new Set();
+  (state.highlightedRoutes || []).forEach(seg => {
+    hlSet.add(`${seg.from}->${seg.to}`);
+    hlSet.add(`${seg.to}->${seg.from}`);
+  });
+
+  // ── Roads ─────────────────────────────────────────────────
+  state.roads.forEach((road, i) => {
+    const a = junctionById(state, road.from);
+    const b = junctionById(state, road.to);
+    const cls = road.status === "open" ? "open" : "closed";
+    const isHL = hlSet.has(`${road.from}->${road.to}`);
+
+    // Draw base road line
+    el("line", {
+      x1: a.x, y1: a.y, x2: b.x, y2: b.y,
+      class: `road-line ${cls}`,
+      "data-road-index": i
+    }, roadsLayer);
+
+    // Overlay highlighted route on top (in routesLayer so it draws above)
+    if (isHL && road.status === "open") {
+      el("line", {
+        x1: a.x, y1: a.y, x2: b.x, y2: b.y,
+        class: "road-line route-highlight"
+      }, routesLayer);
+    }
+
+    // Road label
+    const mid = midpoint(a, b);
+    const angle = angleDeg(a, b);
+    const labelCls = road.status === "closed" ? "road-label closed-label" : "road-label";
+    const t = el("text", {
+      x: mid.x, y: mid.y - 6,
+      "text-anchor": "middle",
+      class: labelCls,
+      transform: `rotate(${angle}, ${mid.x}, ${mid.y - 6})`
+    }, labelsLayer);
+    t.textContent = road.label;
+  });
+
+  // ── Junctions ─────────────────────────────────────────────
+  state.junctions.forEach(j => {
+    const isShelter = j.shelter !== null;
+    const r = isShelter ? 22 : 8;
+
+    if (isShelter) {
+      const s = j.shelter;
+
+      // Animated pulse ring
+      el("circle", {
+        cx: j.x, cy: j.y, r: 28,
+        class: "shelter-ring"
+      }, junctionsLayer);
+
+      // Shelter circle
+      el("circle", {
+        cx: j.x, cy: j.y, r: r,
+        class: "shelter-circle"
+      }, junctionsLayer);
+
+      // Occupied / Total beds label inside circle
+      const bedText = el("text", {
+        x: j.x, y: j.y + 3,
+        "text-anchor": "middle",
+        class: "shelter-bed-label"
+      }, junctionsLayer);
+      bedText.textContent = `${s.occupied}/${s.beds}`;
+
+      // Accessibility icons below circle
+      const icons = [];
+      if (s.pets)       icons.push("🐕");
+      if (s.wheelchair) icons.push("♿");
+      if (icons.length > 0) {
+        const iconText = el("text", {
+          x: j.x, y: j.y + r + 14,
+          "text-anchor": "middle",
+          class: "shelter-icons-label"
+        }, junctionsLayer);
+        iconText.textContent = icons.join(" ");
+      }
+
+      // Shelter name below icons
+      const nameText = el("text", {
+        x: j.x, y: j.y + r + (icons.length > 0 ? 28 : 14),
+        "text-anchor": "middle",
+        class: "shelter-name-label"
+      }, junctionsLayer);
+      nameText.textContent = s.name;
+    } else {
+      // Glow behind dot
+      el("circle", {
+        cx: j.x, cy: j.y, r: 20,
+        fill: "url(#junction-glow)"
+      }, junctionsLayer);
+
+      el("circle", {
+        cx: j.x, cy: j.y, r: r,
+        fill: "var(--accent-blue)",
+        class: "junction-dot",
+        filter: "url(#glow-soft)"
+      }, junctionsLayer);
+    }
+
+    // Junction name above
+    const labelY = isShelter ? j.y - r - 10 : j.y - 16;
+    const label = el("text", {
+      x: j.x, y: labelY,
+      "text-anchor": "middle",
+      class: "junction-label"
+    }, junctionsLayer);
+    label.textContent = j.id;
+  });
+
+  // ── Household markers ─────────────────────────────────────
+  state.households.forEach(h => {
+    const j = junctionById(state, h.junction);
+    if (!j) return;
+    const ox = h.offsetX || 0;
+    const oy = h.offsetY || 0;
+
+    // Diamond marker
+    const size = 7;
+    const cx = j.x + ox;
+    const cy = j.y + oy;
+    el("polygon", {
+      points: `${cx},${cy - size} ${cx + size},${cy} ${cx},${cy + size} ${cx - size},${cy}`,
+      class: "household-marker"
+    }, householdsLayer);
+
+    // Name label
+    const hl = el("text", {
+      x: cx, y: cy - size - 5,
+      "text-anchor": "middle",
+      class: "household-label"
+    }, householdsLayer);
+    hl.textContent = h.name;
+  });
+
+  // ── Stats ─────────────────────────────────────────────────
+  const openCount   = state.roads.filter(r => r.status === "open").length;
+  const closedCount = state.roads.filter(r => r.status === "closed").length;
+  const totalOcc    = state.junctions.reduce((s, j) => s + (j.shelter ? j.shelter.occupied : 0), 0);
+  const totalBeds   = state.junctions.reduce((s, j) => s + (j.shelter ? j.shelter.beds     : 0), 0);
+
+  document.getElementById("stat-open").textContent       = openCount;
+  document.getElementById("stat-closed").textContent     = closedCount;
+  document.getElementById("stat-beds").textContent       = `${totalOcc}/${totalBeds}`;
+  document.getElementById("stat-households").textContent = state.households.length;
+
+  // Disable fire button if Lombard already closed
+  const lombardRoad = state.roads.find(r => r.label === "Lombard St");
+  document.getElementById("btn-hazard").disabled = lombardRoad && lombardRoad.status === "closed";
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Actions
+// ═══════════════════════════════════════════════════════════════════
+
+// 🔥 Deterministic: always closes Lombard St
+function triggerFireOnLombard() {
+  const road = STATE.roads.find(r => r.label === "Lombard St");
+  if (!road || road.status === "closed") {
+    showToast("Lombard St is already closed!");
+    return;
+  }
+  road.status = "closed";
+  addLogEntry("hazard", `🔥 Fire on Lombard St — road closed (${road.from} ↔ ${road.to})`);
+  showToast("🔥 Fire jumps to Lombard — road closed!", "hazard");
+  render(STATE);
+}
+
+// 🏠 Add a household marker and draw its assigned route
+function addHousehold() {
+  if (nextHouseholdIndex >= HOUSEHOLD_SCENARIOS.length) {
+    showToast("All households placed!", "info");
+    return;
+  }
+
+  const scenario = HOUSEHOLD_SCENARIOS[nextHouseholdIndex];
+  nextHouseholdIndex++;
+
+  // Slight offset so multiple markers at same junction don't overlap
+  const existing = STATE.households.filter(h => h.junction === scenario.junction).length;
+  STATE.households.push({
+    junction: scenario.junction,
+    name: scenario.name,
+    shelter: scenario.shelter,
+    offsetX: existing * 18,
+    offsetY: -existing * 6
+  });
+
+  // Build route segments from the path
+  for (let i = 0; i < scenario.route.length - 1; i++) {
+    STATE.highlightedRoutes.push({
+      from: scenario.route[i],
+      to: scenario.route[i + 1]
+    });
+  }
+
+  // Increment occupied bed count at target shelter
+  const shelterJunction = junctionById(STATE, scenario.shelter);
+  if (shelterJunction && shelterJunction.shelter) {
+    shelterJunction.shelter.occupied = Math.min(
+      shelterJunction.shelter.occupied + 1,
+      shelterJunction.shelter.beds
+    );
+  }
+
+  addLogEntry("info", `🏠 ${scenario.name} placed at ${scenario.junction} → routed to ${shelterJunction.shelter.name}`);
+  showToast(`🏠 ${scenario.name} → ${shelterJunction.shelter.name}`, "info");
+  render(STATE);
+}
+
+// ↺ Reset everything
+function resetAll() {
+  STATE.roads.forEach(r => r.status = "open");
+  STATE.households = [];
+  STATE.highlightedRoutes = [];
+  nextHouseholdIndex = 0;
+
+  // Reset occupied counts to initial values
+  const initialOccupied = { "Marina": 34, "Presidio": 71, "FortMason": 12 };
+  STATE.junctions.forEach(j => {
+    if (j.shelter && initialOccupied[j.id] !== undefined) {
+      j.shelter.occupied = initialOccupied[j.id];
+    }
+  });
+
+  document.getElementById("event-log").innerHTML =
+    '<div style="font-size:12px;color:var(--text-secondary);padding:8px 0;">No events yet.</div>';
+  showToast("✓ All roads and households restored.", "info");
+  render(STATE);
+}
+
+// ─── Event log ──────────────────────────────────────────────────
+function addLogEntry(type, message) {
+  const log = document.getElementById("event-log");
+  // Clear placeholder
+  if (log.querySelector("div:not(.log-entry)")) {
+    log.innerHTML = "";
+  }
+  const now = new Date().toLocaleTimeString();
+  const entry = document.createElement("div");
+  entry.className = type === "info" ? "log-entry log-info" : "log-entry";
+  entry.innerHTML = `<span class="log-time">${now}</span>${message}`;
+  log.prepend(entry);
+}
+
+// ─── Toast ──────────────────────────────────────────────────────
+let toastTimer;
+function showToast(msg, type) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.className = "toast show" + (type === "info" ? " info" : "");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.className = "toast"; }, 2800);
+}
+
+// ─── Init ───────────────────────────────────────────────────────
+render(STATE);
+</script>
+</body>
+</html>
